@@ -1,0 +1,17 @@
+fastapi
+uvicorn[standard]
+sqlalchemy[asyncio]
+asyncpg
+alembic
+redis
+pydantic[email]
+pydantic-settings
+aiosmtpd
+email-validator
+python-multipart
+orjson
+python-dotenv
+cryptography
+pytest
+pytest-asyncio
+httpx
