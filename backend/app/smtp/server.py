@@ -1,3 +1,9 @@
+from pathlib import Path
+from dotenv import load_dotenv
+
+ROOT = Path(__file__).resolve().parents[3]
+load_dotenv(ROOT / ".env")
+
 import asyncio
 import os
 import uuid
@@ -8,11 +14,7 @@ from pathlib import Path
 from aiosmtpd.controller import Controller
 from sqlalchemy import select
 
-from pathlib import Path
-from dotenv import load_dotenv
 
-ROOT = Path(__file__).resolve().parents[2]
-load_dotenv(ROOT / ".env")
 
 from app.core.database import SessionLocal
 from app.models.inbox import Inbox
@@ -37,7 +39,7 @@ from app.core.redis import redis_client
 PROJECT_ROOT = Path(__file__).resolve().parents[3] # Adjusted to go up three levels to reach the project root
 SPOOL_DIR = PROJECT_ROOT / "storage" / "spool" # Directory to store raw email files
 
-MAX_EMAIL_SIZE = int (os.getenv("MAX_EMAIL_SIZE", 10 * 1024 * 1024))  # Default to 10 MB if not set
+MAX_EMAIL_SIZE = int (os.getenv("MAX_EMAIL_SIZE_BYTES", 10 * 1024 * 1024))  # Default to 10 MB if not set
 
 def save_raw_email(message_id: str, raw_data: bytes) -> str:
     """Save the raw email data to a file in the spool directory."""
@@ -80,35 +82,62 @@ class InvisMailHandler:
 
         return "250 Recipient successfully accepted for delivery."
 
-    async def handle_DATA(self, server, session, envelope,):
+        
+    async def handle_DATA(self, server, session, envelope):
+
         raw_data = envelope.original_content
 
         if len(raw_data) > MAX_EMAIL_SIZE:
             return "552 Message size exceeds maximum allowed size."
 
-        if not envelope.rcpt_tos: 
+        if not envelope.rcpt_tos:
             return "550 No valid recipients found."
 
         message_id = str(uuid.uuid4())
 
-        try:
-            spool_path = await asyncio.to_thread(save_raw_email, message_id, raw_data) # Save the raw email data to a file in the spool directory
+        # Use a Redis transaction so all recipient events are submitted
+        # together rather than publishing them one at a time.
+        pipeline = redis_client.pipeline(transaction=True)
 
+        try:
             for recipient in envelope.rcpt_tos:
-                await redis_client.xadd(
+
+                # Each recipient gets an independent spool file.
+                spool_id = str(uuid.uuid4())
+
+                spool_path = await asyncio.to_thread(
+                    save_raw_email,
+                    spool_id,
+                    raw_data,
+                )
+
+                pipeline.xadd(
                     "email:incoming",
                     {
-                        "message_id": message_id, 
-                        "recipient": recipient, 
+                        "message_id": message_id,
+                        "recipient": recipient,
                         "sender": envelope.mail_from or "unknown",
                         "spool_path": spool_path,
-                        "received_at": datetime.now(timezone.utc).isoformat(),
+                        "received_at": datetime.now(
+                            timezone.utc
+                        ).isoformat(),
                     },
                 )
+
+            await pipeline.execute()
 
             return "250 Message accepted for processing."
 
         except Exception:
+            # Do not delete spool files here. If Redis executed the
+            # transaction but the client lost its response, events may
+            # already reference those files.
+            import logging
+            logging.exception(
+                "SMTP ingestion failed for message %s",
+                message_id,
+            )
+
             return "451 Temporary server error. Please try again later."
 
 
