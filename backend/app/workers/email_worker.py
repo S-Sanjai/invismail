@@ -1,106 +1,461 @@
+
 import asyncio
+import logging
 import os
 import socket
-
 import time
-import logging
-
 
 from redis.exceptions import ResponseError
 
 from app.core.redis import redis_client
 from app.services.email_processor import process_email_event
 
+
+# --------------------------------------------------
+# Configuration
+# --------------------------------------------------
+
 STREAM = "email:incoming"
 GROUP = "email-workers"
-CONSUMER = f"{socket.gethostname()}-{os.getpid()}"  # Unique identifier for this worker instance
 
-MAX_ATTEMPTS=5
+CONSUMER = f"{socket.gethostname()}-{os.getpid()}"
+
+DLQ = "email:dead-letter-queue"
+
+MAX_ATTEMPTS = 5
+
 ATTEMPT_KEY_PREFIX = "email:attempts:"
 LAST_ATTEMPT_PREFIX = "email:last-attempt:"
-ATTEMPT_TTL = 1*60*60
+LAST_ERROR_PREFIX = "email:last-error:"
 
-RECOVERY_IDLE_TIME = 60_000
+RETRY_INTERVAL = 60
+LONG_RETRY_INTERVAL = 300
+
+ATTEMPT_TTL = 7 * 24 * 60 * 60
+
+RECOVERY_IDLE_TIME = 60_000  # 60 seconds
 BATCH_SIZE = 5
-
-RETRY_INTERVEL = 60
-LONG_RETRY_INTERVEL = 300
-
-DLQ = "email:dead-letter-queue"  # Dead Letter Queue for failed messages
 
 logger = logging.getLogger(__name__)
 
 
+# --------------------------------------------------
+# Helpers
+# --------------------------------------------------
+
+def as_text(value):
+    """
+    Convert Redis bytes or other values into strings.
+
+    Supports Redis clients configured with either
+    decode_responses=True or decode_responses=False.
+    """
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+
+    if value is None:
+        return ""
+
+    return str(value)
+
+
+def normalize_event_data(event_data):
+    """
+    Normalize Redis event keys and values into strings.
+    """
+    return {
+        as_text(key): as_text(value)
+        for key, value in event_data.items()
+    }
+
+
+def attempt_key(event_id):
+    return f"{ATTEMPT_KEY_PREFIX}{as_text(event_id)}"
+
+
+def last_attempt_key(event_id):
+    return f"{LAST_ATTEMPT_PREFIX}{as_text(event_id)}"
+
+
+def last_error_key(event_id):
+    return f"{LAST_ERROR_PREFIX}{as_text(event_id)}"
+
+
+def get_retry_delay(previous_attempts):
+    """
+    Determine retry delay based on previous failed attempts.
+
+    Attempts 1-2: 60 seconds
+    Attempts 3-5: 300 seconds
+    """
+    if previous_attempts < 3:
+        return RETRY_INTERVAL
+
+    return LONG_RETRY_INTERVAL
+
+
+# --------------------------------------------------
+# Consumer group initialization
+# --------------------------------------------------
+
 async def initialize_consumer_group():
+
     try:
-        await redis_client.xgroup_create(STREAM, GROUP, id='0', mkstream=True)
-        print(f"Consumer group '{GROUP}' created for stream '{STREAM}'.")
+        await redis_client.xgroup_create(
+            STREAM,
+            GROUP,
+            id="0",
+            mkstream=True,
+        )
+
+        logger.info(
+            "Consumer group '%s' created.",
+            GROUP,
+        )
+
     except ResponseError as e:
+
         if "BUSYGROUP" in str(e):
-            print(f"Consumer group '{GROUP}' already exists.")
+            logger.info(
+                "Consumer group '%s' already exists.",
+                GROUP,
+            )
         else:
             raise
 
-def attempt_key(event_id):
-    return f"{ATTEMPT_KEY_PREFIX}{event_id}"
 
-def last_attempt_key(event_id):
-    return f"{LAST_ATTEMPT_PREFIX}{event_id}"
+# --------------------------------------------------
+# Retry tracking
+# --------------------------------------------------
 
-def get_retry_delay(previous_attempts):
-    if previous_attempts >= 3:
-        return LONG_RETRY_INTERVEL
+async def record_attempt(event_id, error):
 
-    return RETRY_INTERVEL
+    pipe = redis_client.pipeline(transaction=True)
+
+    pipe.incr(attempt_key(event_id))
+    pipe.expire(attempt_key(event_id), ATTEMPT_TTL)
+
+    pipe.set(
+        last_attempt_key(event_id),
+        time.time(),
+        ex=ATTEMPT_TTL,
+    )
+
+    pipe.set(
+        last_error_key(event_id),
+        str(error)[:2000],
+        ex=ATTEMPT_TTL,
+    )
+
+    results = await pipe.execute()
+
+    attempts = int(results[0])
+
+    logger.warning(
+        "Event %s failed. Attempt %s/%s.",
+        event_id,
+        attempts,
+        MAX_ATTEMPTS,
+    )
+
+    return attempts
+
+
+async def get_attempts(event_id):
+
+    attempts = await redis_client.get(
+        attempt_key(event_id)
+    )
+
+    return int(as_text(attempts) or "0")
+
 
 async def is_retry_due(event_id):
+    """
+    Check whether a recovered event has waited long enough
+    before being processed again.
+    """
 
-    attemp
+    attempts = await get_attempts(event_id)
+
+    if attempts == 0:
+        return True
+
+    last_attempt = await redis_client.get(
+        last_attempt_key(event_id)
+    )
+
+    if last_attempt is None:
+        return True
+
+    delay = get_retry_delay(attempts)
+
+    elapsed = time.time() - float(as_text(last_attempt))
+
+    return elapsed >= delay
 
 
-async def handle_event(event_id, event_data):
+async def clear_retry_metadata(event_id):
+
+    await redis_client.delete(
+        attempt_key(event_id),
+        last_attempt_key(event_id),
+        last_error_key(event_id),
+    )
+
+
+# --------------------------------------------------
+# Dead Letter Queue
+# --------------------------------------------------
+
+async def move_to_dead_letter(
+    event_id,
+    event_data,
+    attempts,
+    failure_reason,
+):
+    """
+    Move a failed event to the DLQ and acknowledge the
+    original event in one Redis transaction.
+    """
+
+    dlq_data = {
+        **normalize_event_data(event_data),
+
+        "original_event_id": as_text(event_id),
+        "original_stream": STREAM,
+        "failure_reason": str(failure_reason)[:2000],
+        "attempts": str(attempts),
+        "failed_at": str(time.time()),
+    }
+
+    pipe = redis_client.pipeline(transaction=True)
+
+    pipe.xadd(DLQ, dlq_data)
+
+    pipe.xack(
+        STREAM,
+        GROUP,
+        event_id,
+    )
+
+    pipe.delete(
+        attempt_key(event_id),
+        last_attempt_key(event_id),
+        last_error_key(event_id),
+    )
+
+    await pipe.execute()
+
+    logger.error(
+        "Event %s moved to DLQ after %s attempts.",
+        event_id,
+        attempts,
+    )
+
+
+# --------------------------------------------------
+# Event processing
+# --------------------------------------------------
+
+async def handle_event(
+    event_id,
+    event_data,
+    recovered=False,
+):
+
+    event_id = as_text(event_id)
+    event_data = normalize_event_data(event_data)
+
+    attempts = await get_attempts(event_id)
+
+    # If the maximum attempts have already been reached,
+    # try moving the event to DLQ without processing again.
+    if attempts >= MAX_ATTEMPTS:
+
+        failure_reason = await redis_client.get(
+            last_error_key(event_id)
+        )
+
+        await move_to_dead_letter(
+            event_id,
+            event_data,
+            attempts,
+            as_text(failure_reason) or "Maximum attempts exceeded",
+        )
+
+        return
+
+    # Apply retry delay only to recovered pending events.
+    if recovered:
+
+        retry_due = await is_retry_due(event_id)
+
+        if not retry_due:
+            return
 
     try:
-        await process_email_event(event_id, event_data)
-        await redis_client.xack(STREAM, GROUP, event_id)
-        print(f"Processed and acknowledged email event: {event_id}.")
+
+        logger.info(
+            "Processing event %s.",
+            event_id,
+        )
+
+        await process_email_event(
+            event_id,
+            event_data,
+        )
+
+        # Acknowledge only after successful processing.
+        await redis_client.xack(
+            STREAM,
+            GROUP,
+            event_id,
+        )
+
+        await clear_retry_metadata(event_id)
+
+        logger.info(
+            "Event %s processed and acknowledged.",
+            event_id,
+        )
+
+    except ValueError as e:
+
+    # Permanent processing failure.
+    # Retrying an email for a deleted/expired inbox is pointless.
+        logger.error(
+            "Permanent failure for event %s: %s",
+            event_id,
+            e,
+        )
+
+        await move_to_dead_letter(
+            event_id,
+            event_data,
+            attempts + 1,
+            e,
+        )
+
     except Exception as e:
-        print(f"Error processing email event {event_id}: {e}")
-        # Move the failed message to the Dead Letter Queue
-        # await redis_client.xadd(DLQ, event_data)
-        # await redis_client.xack(STREAM, GROUP, event_id)
-        # print(f"Moved email event {event_id} to Dead Letter Queue.")
+
+        # Transient failure: retain the event for retry.
+        logger.exception(
+            "Temporary processing failure for event %s.",
+            event_id,
+        )
+
+        attempts = await record_attempt(
+            event_id,
+            e,
+        )
+
+        if attempts >= MAX_ATTEMPTS:
+
+            await move_to_dead_letter(
+                event_id,
+                event_data,
+                attempts,
+                e,
+            )
+        # Otherwise, leave the event pending.
+        # It will be recovered after the idle threshold
+        # and processed when its retry delay has elapsed.
+
+
+# --------------------------------------------------
+# Pending event recovery
+# --------------------------------------------------
 
 async def recover_pending_events():
 
-    result = await redis_client.xautoclaim(
-        name=STREAM,
-        groupname=GROUP,
-        consumername=CONSUMER,
-        min_idle_time=60000,
-        start_id="0-0",
-        count=5,
-    )
-
-    next_id, messages, deleted_ids = result
-
-    for event_id, data in messages:
-        await handle_event(event_id, data)
-
-
-async def main():
-    await initialize_consumer_group()
+    cursor = "0-0"
 
     while True:
+
+        result = await redis_client.xautoclaim(
+            name=STREAM,
+            groupname=GROUP,
+            consumername=CONSUMER,
+            min_idle_time=RECOVERY_IDLE_TIME,
+            start_id=cursor,
+            count=BATCH_SIZE,
+        )
+
+        next_id, messages, deleted_ids = result
+
+        for event_id, event_data in messages:
+
+            await handle_event(
+                event_id,
+                event_data,
+                recovered=True,
+            )
+
+        cursor = as_text(next_id)
+
+        if cursor == "0-0":
+            break
+
+
+# --------------------------------------------------
+# Main worker loop
+# --------------------------------------------------
+
+async def main():
+
+    await initialize_consumer_group()
+
+    logger.info(
+        "Email worker started. Consumer: %s",
+        CONSUMER,
+    )
+
+    while True:
+
         try:
-            events = await redis_client.xreadgroup(GROUP, CONSUMER, {STREAM: '>'}, count=5, block=5000) # Wait for 5 seconds if no messages are available
+
+            # First recover abandoned pending events.
+            await recover_pending_events()
+
+            # Then read new events.
+            events = await redis_client.xreadgroup(
+                GROUP,
+                CONSUMER,
+                {STREAM: ">"},
+                count=BATCH_SIZE,
+                block=5000,
+            )
+
             if events:
+
                 for stream_name, messages in events:
+
                     for event_id, event_data in messages:
-                        await handle_event(event_id, event_data) 
-        except Exception as e:
-            print(f"Error reading from stream: {e}")
-            await asyncio.sleep(5)  # Wait before retrying on error
+
+                        await handle_event(
+                            event_id,
+                            event_data,
+                        )
+
+        except asyncio.CancelledError:
+            logger.info("Email worker shutting down.")
+            raise
+
+        except Exception:
+
+            logger.exception(
+                "Email worker encountered an error."
+            )
+
+            await asyncio.sleep(5)
+
 
 if __name__ == "__main__":
+
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    )
+
     asyncio.run(main())
