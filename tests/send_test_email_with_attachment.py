@@ -5,7 +5,7 @@ from pathlib import Path
 
 # Replace with an actual active inbox created in InvisMail.
 SENDER = "sender@example.com"
-RECIPIENT = "ac4dcf143825d202@invismail.test"
+RECIPIENT = "a02d6e69f18cfbc4@invismail.test"
 
 SMTP_HOST = "127.0.0.1"
 SMTP_PORT = 2525
