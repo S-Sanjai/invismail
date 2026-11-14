@@ -229,23 +229,20 @@ async def move_to_dead_letter(
         "failed_at": str(time.time()),
     }
 
-    pipe = redis_client.pipeline(transaction=True)
+    # Write to DLQ first. Only acknowledge/delete metadata after it succeeds.
+    await redis_client.xadd(DLQ, dlq_data)
 
-    pipe.xadd(DLQ, dlq_data)
-
-    pipe.xack(
+    await redis_client.xack(
         STREAM,
         GROUP,
         event_id,
     )
 
-    pipe.delete(
+    await redis_client.delete(
         attempt_key(event_id),
         last_attempt_key(event_id),
         last_error_key(event_id),
     )
-
-    await pipe.execute()
 
     logger.error(
         "Event %s moved to DLQ after %s attempts.",
@@ -453,9 +450,8 @@ async def main():
 
 if __name__ == "__main__":
 
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-    )
+    from app.core.logging import setup_logging
+
+    setup_logging("invismail.worker")
 
     asyncio.run(main())

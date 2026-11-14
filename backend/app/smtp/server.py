@@ -19,6 +19,9 @@ from sqlalchemy import select
 from app.core.database import SessionLocal
 from app.models.inbox import Inbox
 from app.core.redis import redis_client
+from app.core.logging import setup_logging
+
+logger = setup_logging("invismail.smtp")
 
 
 """
@@ -147,11 +150,16 @@ def start_smtp_server():
 
     handler = InvisMailHandler()
 
-    controller = Controller(handler, hostname="127.0.0.1", port=2525, data_size_limit=MAX_EMAIL_SIZE)
+    controller = Controller(handler, hostname="0.0.0.0", port=2525, data_size_limit=MAX_EMAIL_SIZE)
 
     controller.start()
 
-    print(f"SMTP server listening on {controller.hostname}:{controller.port} with max email size {MAX_EMAIL_SIZE} bytes.")
+    logger.info(
+        "SMTP server listening on %s:%s with max email size %s bytes.",
+        controller.hostname,
+        controller.port,
+        MAX_EMAIL_SIZE,
+    )
 
     return controller  # Return the controller to allow for graceful shutdown if needed
 
@@ -164,5 +172,5 @@ if __name__ == "__main__":
             time.sleep(1)
 
     except KeyboardInterrupt:
-        print("Shutting down SMTP server...")
+        logger.info("Shutting down SMTP server...")
         controller.stop()

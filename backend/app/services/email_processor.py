@@ -1,11 +1,12 @@
-
+import asyncio
+import logging
 import os
 import uuid
-
 from datetime import datetime, timezone
 from pathlib import Path
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 
 from app.core.database import SessionLocal
 from app.core.redis import redis_client
@@ -17,17 +18,18 @@ from app.services.email_parser import parse_email
 from app.services.storage_service import save_attachment
 
 
-async def process_email_event(event_id: str, data: dict):
+logger = logging.getLogger(__name__)
 
+
+async def process_email_event(event_id: str, data: dict):
     recipient = data["recipient"].lower()
     spool_path = Path(data["spool_path"])
 
-    raw_data = spool_path.read_bytes()
+    raw_data = await asyncio.to_thread(spool_path.read_bytes)
 
     parsed = parse_email(raw_data)
 
     async with SessionLocal() as db:
-
         result = await db.execute(
             select(Inbox).where(
                 Inbox.email_address == recipient,
@@ -49,6 +51,7 @@ async def process_email_event(event_id: str, data: dict):
         )
 
         if existing.scalar_one_or_none():
+            logger.info("Duplicate event %s already processed; skipping.", event_id)
             return
 
         email = Email(
@@ -64,11 +67,17 @@ async def process_email_event(event_id: str, data: dict):
         )
 
         db.add(email)
-        await db.flush()
+
+        try:
+            await db.flush()
+        except IntegrityError:
+            await db.rollback()
+            logger.info("Duplicate source_event_id %s ignored.", event_id)
+            return
 
         for item in parsed["attachments"]:
-
-            storage_path = save_attachment(
+            storage_path = await asyncio.to_thread(
+                save_attachment,
                 str(email.id),
                 item["filename"],
                 item["content"],
@@ -84,12 +93,22 @@ async def process_email_event(event_id: str, data: dict):
 
             db.add(attachment)
 
-        await db.commit()
+        try:
+            await db.commit()
+        except IntegrityError:
+            await db.rollback()
+            logger.info("Duplicate source_event_id %s ignored.", event_id)
+            return
 
-        # Notification is emitted only after the database commit.
         await redis_client.publish(
             f"inbox:{inbox.id}:events",
             str(email.id),
         )
 
-    print(f"Email saved: {recipient}")
+    # Keep the raw spool file until the database commit succeeds.
+    try:
+        await asyncio.to_thread(spool_path.unlink, missing_ok=True)
+    except OSError:
+        logger.exception("Could not delete spool file: %s", spool_path)
+
+    logger.info("Email saved for recipient %s", recipient)

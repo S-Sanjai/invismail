@@ -43,8 +43,6 @@ async def inbox_events(
                 else:
                     yield ": heartbeat\n\n"
 
-                await asyncio.sleep(0.1)
-
         finally:
             await pubsub.unsubscribe(channel)
             await pubsub.aclose()

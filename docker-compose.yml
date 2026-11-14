@@ -32,6 +32,93 @@ services:
       timeout: 3s
       retries: 10
 
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: invismail-api
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+asyncpg://invismail:${DB_PASSWORD}@postgres:5432/invismail
+      REDIS_URL: redis://redis:6379/0
+      DEFAULT_DOMAIN: ${DEFAULT_DOMAIN:-invismail.test}
+      MAX_EMAIL_SIZE_BYTES: ${MAX_EMAIL_SIZE_BYTES:-10485760}
+      MAX_ATTACHMENT_SIZE_BYTES: ${MAX_ATTACHMENT_SIZE_BYTES:-5242880}
+    ports:
+      - "127.0.0.1:8000:8000"
+    volumes:
+      - ./storage:/app/storage
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/ready')\""]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  smtp:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: invismail-smtp
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: ["python", "-m", "app.smtp.server"]
+    environment:
+      DATABASE_URL: postgresql+asyncpg://invismail:${DB_PASSWORD}@postgres:5432/invismail
+      REDIS_URL: redis://redis:6379/0
+      DEFAULT_DOMAIN: ${DEFAULT_DOMAIN:-invismail.test}
+      MAX_EMAIL_SIZE_BYTES: ${MAX_EMAIL_SIZE_BYTES:-10485760}
+      MAX_ATTACHMENT_SIZE_BYTES: ${MAX_ATTACHMENT_SIZE_BYTES:-5242880}
+    ports:
+      - "127.0.0.1:2525:2525"
+    volumes:
+      - ./storage:/app/storage
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: invismail-worker
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: ["python", "-m", "app.workers.email_worker"]
+    environment:
+      DATABASE_URL: postgresql+asyncpg://invismail:${DB_PASSWORD}@postgres:5432/invismail
+      REDIS_URL: redis://redis:6379/0
+    volumes:
+      - ./storage:/app/storage
+
+  cleanup:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: invismail-cleanup
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: ["python", "-m", "app.workers.cleanup_worker"]
+    environment:
+      DATABASE_URL: postgresql+asyncpg://invismail:${DB_PASSWORD}@postgres:5432/invismail
+      REDIS_URL: redis://redis:6379/0
+    volumes:
+      - ./storage:/app/storage
+
 volumes:
   postgres_data:
   redis_data:

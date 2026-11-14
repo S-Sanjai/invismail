@@ -10,6 +10,7 @@ from sqlalchemy import (
     BigInteger,
     ForeignKey,
     UniqueConstraint,
+    Index,
     func,
 )
 from sqlalchemy.dialects.postgresql import UUID 
@@ -24,6 +25,11 @@ class Email(Base):
         UniqueConstraint(
             "source_event_id",
             name = "uq_emails_source_event"
+        ),
+        Index(
+            "ix_emails_inbox_received_at",
+            "inbox_id",
+            "received_at",
         ),
     )
 

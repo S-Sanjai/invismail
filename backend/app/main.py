@@ -7,6 +7,10 @@ load_dotenv(ROOT / ".env")
 
 from fastapi import FastAPI
 
+from app.core.logging import setup_logging
+
+setup_logging("invismail.api")
+
 from app.api.inboxes import router as inbox_router
 from app.api.messages import router as message_router
 from app.api.events import router as events_router

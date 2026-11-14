@@ -14,6 +14,9 @@ from app.services.storage_service import ATTACHMENT_DIR
 import time
 
 from app.models.attachment import Attachment
+from app.core.logging import setup_logging
+
+logger = setup_logging("invismail.cleanup")
 
 
 async def cleanup_orphaned_attachment_files(
@@ -57,12 +60,12 @@ async def cleanup_orphaned_attachment_files(
                 removed += 1
 
         except OSError:
-            print(
-                f"Could not inspect/remove attachment: {file_path}"
+            logger.exception(
+                "Could not inspect/remove attachment: %s", file_path
             )
 
     if removed:
-        print(f"Removed {removed} orphaned attachment files.")
+        logger.info("Removed %s orphaned attachment files.", removed)
 
 
 
@@ -128,25 +131,26 @@ async def cleanup_expired_inboxes():
                 missing_ok=True,
             )
         except OSError as e:
-            print(f"Could not delete attachment {path}: {e}")
+            logger.exception("Could not delete attachment %s: %s", path, e)
 
-    print(
-        f"Deleted {len(expired_inboxes)} expired inboxes "
-        f"and cleaned up {len(attachment_paths)} attachment files."
+    logger.info(
+        "Deleted %s expired inboxes and cleaned up %s attachment files.",
+        len(expired_inboxes),
+        len(attachment_paths),
     )
 
 
 async def main():
 
-    print("InvisMail cleanup Worker Stared")
+    logger.info("InvisMail cleanup worker started")
 
     while True:
         try:
             await cleanup_expired_inboxes()
             await cleanup_orphaned_attachment_files()
 
-        except Exception as e:
-            print(f"Cleanup error: {e}")
+        except Exception:
+            logger.exception("Cleanup error")
 
         await asyncio.sleep(60)
 

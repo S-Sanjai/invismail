@@ -1,12 +1,13 @@
 import os
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.exc import IntegrityError
 
 from app.core.database import get_db
 from app.core.security import generate_email_address, generate_access_token, hash_token
+from app.core.rate_limit import enforce_rate_limit
 from app.models import Inbox
 from app.schemas.inbox import CreateInboxSchema
 
@@ -16,7 +17,12 @@ router = APIRouter(
 )
 
 @router.post("", status_code=201)
-async def create_inbox(request: CreateInboxSchema, db: AsyncSession = Depends(get_db),):
+async def create_inbox(
+    request: CreateInboxSchema,
+    http_request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    await enforce_rate_limit(http_request, "create_inbox", int(os.getenv("RATE_LIMIT_CREATE_INBOX", "30")))
     domain = os.getenv("DEFAULT_DOMAIN", "invismail.test")  # Default domain if not set in environment variables
 
     for attempt in range(3):

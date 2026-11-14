@@ -9,3 +9,4 @@ __pycache__/
 
 storage/spool/*
 storage/attachments/*
+.env.*
