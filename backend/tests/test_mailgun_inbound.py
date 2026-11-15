@@ -4,7 +4,7 @@ from urllib.parse import quote_from_bytes
 
 import pytest
 
-from app.api.inbound import (
+from app.services.mailgun import (
     normalize_recipient,
     parse_mailgun_form,
     verify_mailgun_signature,
