@@ -39,8 +39,9 @@ logger = setup_logging("invismail.smtp")
 """
 
 
+from app.services.storage_service import SPOOL_DIR
+
 PROJECT_ROOT = Path(__file__).resolve().parents[3] # Adjusted to go up three levels to reach the project root
-SPOOL_DIR = PROJECT_ROOT / "storage" / "spool" # Directory to store raw email files
 
 MAX_EMAIL_SIZE = int (os.getenv("MAX_EMAIL_SIZE_BYTES", 10 * 1024 * 1024))  # Default to 10 MB if not set
 

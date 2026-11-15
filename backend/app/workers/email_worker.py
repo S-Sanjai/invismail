@@ -24,6 +24,13 @@ DLQ = "email:dead-letter-queue"
 
 MAX_ATTEMPTS = 5
 
+SPOOL_DLQ_RETENTION_SECONDS = int(
+    os.getenv("SPOOL_DLQ_RETENTION_SECONDS", "3600")
+)
+SPOOL_ORPHAN_GRACE_SECONDS = int(
+    os.getenv("SPOOL_ORPHAN_GRACE_SECONDS", "3600")
+)
+
 ATTEMPT_KEY_PREFIX = "email:attempts:"
 LAST_ATTEMPT_PREFIX = "email:last-attempt:"
 LAST_ERROR_PREFIX = "email:last-error:"
@@ -208,6 +215,13 @@ async def clear_retry_metadata(event_id):
 # Dead Letter Queue
 # --------------------------------------------------
 
+def _dlq_retention_seconds():
+    value = globals().get("SPOOL_DLQ_RETENTION_SECONDS", None)
+    if value is None:
+        value = os.getenv("SPOOL_DLQ_RETENTION_SECONDS", "3600")
+    return int(value)
+
+
 async def move_to_dead_letter(
     event_id,
     event_data,
@@ -219,6 +233,10 @@ async def move_to_dead_letter(
     original event in one Redis transaction.
     """
 
+    failed_at = time.time()
+    retention = _dlq_retention_seconds()
+    spool_expires_at = failed_at + retention
+
     dlq_data = {
         **normalize_event_data(event_data),
 
@@ -226,23 +244,24 @@ async def move_to_dead_letter(
         "original_stream": STREAM,
         "failure_reason": str(failure_reason)[:2000],
         "attempts": str(attempts),
-        "failed_at": str(time.time()),
+        "failed_at": str(failed_at),
+        "spool_expires_at": str(spool_expires_at),
     }
 
-    # Write to DLQ first. Only acknowledge/delete metadata after it succeeds.
-    await redis_client.xadd(DLQ, dlq_data)
-
-    await redis_client.xack(
-        STREAM,
-        GROUP,
-        event_id,
-    )
-
-    await redis_client.delete(
+    pipe = redis_client.pipeline(transaction=True)
+    pipe.xadd(DLQ, dlq_data)
+    pipe.xack(STREAM, GROUP, event_id)
+    pipe.delete(
         attempt_key(event_id),
         last_attempt_key(event_id),
         last_error_key(event_id),
     )
+
+    results = await pipe.execute()
+
+    # Verify the transaction result (XACK returns number acknowledged).
+    if not results or len(results) < 3:
+        raise RuntimeError("DLQ handoff transaction failed")
 
     logger.error(
         "Event %s moved to DLQ after %s attempts.",

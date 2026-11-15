@@ -98,6 +98,8 @@ services:
     environment:
       DATABASE_URL: postgresql+asyncpg://invismail:${DB_PASSWORD}@postgres:5432/invismail
       REDIS_URL: redis://redis:6379/0
+      SPOOL_DLQ_RETENTION_SECONDS: ${SPOOL_DLQ_RETENTION_SECONDS:-3600}
+      SPOOL_ORPHAN_GRACE_SECONDS: ${SPOOL_ORPHAN_GRACE_SECONDS:-3600}
     volumes:
       - ./storage:/app/storage
 
@@ -116,6 +118,8 @@ services:
     environment:
       DATABASE_URL: postgresql+asyncpg://invismail:${DB_PASSWORD}@postgres:5432/invismail
       REDIS_URL: redis://redis:6379/0
+      SPOOL_DLQ_RETENTION_SECONDS: ${SPOOL_DLQ_RETENTION_SECONDS:-3600}
+      SPOOL_ORPHAN_GRACE_SECONDS: ${SPOOL_ORPHAN_GRACE_SECONDS:-3600}
     volumes:
       - ./storage:/app/storage
 

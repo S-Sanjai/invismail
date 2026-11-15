@@ -15,16 +15,53 @@ from app.models.email import Email
 from app.models.attachment import Attachment
 
 from app.services.email_parser import parse_email
-from app.services.storage_service import save_attachment
+from app.services.storage_service import (
+    save_attachment,
+    safe_delete_spool_file,
+    delete_spool_file,
+    SPOOL_DIR,
+)
 
 
 logger = logging.getLogger(__name__)
+
+
+def _spool_dlq_retention_seconds():
+    # Local helper not needed here, but keep module env access consistent.
+    return int(os.getenv("SPOOL_DLQ_RETENTION_SECONDS", "3600"))
+
+
+async def _delete_spool(path):
+    await asyncio.to_thread(
+        safe_delete_spool_file,
+        path,
+        missing_ok=True,
+    )
 
 
 async def process_email_event(event_id: str, data: dict):
     recipient = data["recipient"].lower()
     spool_path = Path(data["spool_path"])
 
+    # 1-3. Duplicate check BEFORE reading the spool file or validating inbox.
+    async with SessionLocal() as db:
+        existing_result = await db.execute(
+            select(Email).where(
+                Email.source_event_id == event_id
+            )
+        )
+        existing_email = existing_result.scalar_one_or_none()
+
+    if existing_email is not None:
+        # Considered successfully processed. Clean up leftover spool file.
+        try:
+            await _delete_spool(spool_path)
+        except Exception:
+            logger.exception("Could not delete spool file: %s", spool_path)
+        logger.info("Duplicate event %s already processed; skipping.", event_id)
+        return
+
+    # Only read/parse spool when no existing DB record.
     raw_data = await asyncio.to_thread(spool_path.read_bytes)
 
     parsed = parse_email(raw_data)
@@ -44,6 +81,7 @@ async def process_email_event(event_id: str, data: dict):
         if inbox is None:
             raise ValueError("Inbox no longer exists or has expired")
 
+        # Re-check for duplicate inside the transaction (race safety).
         existing = await db.execute(
             select(Email).where(
                 Email.source_event_id == event_id
@@ -51,6 +89,11 @@ async def process_email_event(event_id: str, data: dict):
         )
 
         if existing.scalar_one_or_none():
+            await db.rollback()
+            try:
+                await _delete_spool(spool_path)
+            except Exception:
+                logger.exception("Could not delete spool file: %s", spool_path)
             logger.info("Duplicate event %s already processed; skipping.", event_id)
             return
 
@@ -72,8 +115,20 @@ async def process_email_event(event_id: str, data: dict):
             await db.flush()
         except IntegrityError:
             await db.rollback()
-            logger.info("Duplicate source_event_id %s ignored.", event_id)
-            return
+            # Verify a duplicate actually exists.
+            verify_result = await db.execute(
+                select(Email).where(
+                    Email.source_event_id == event_id
+                )
+            )
+            if verify_result.scalar_one_or_none() is not None:
+                try:
+                    await _delete_spool(spool_path)
+                except Exception:
+                    logger.exception("Could not delete spool file: %s", spool_path)
+                logger.info("Duplicate source_event_id %s ignored.", event_id)
+                return
+            raise
 
         for item in parsed["attachments"]:
             storage_path = await asyncio.to_thread(
@@ -97,18 +152,33 @@ async def process_email_event(event_id: str, data: dict):
             await db.commit()
         except IntegrityError:
             await db.rollback()
-            logger.info("Duplicate source_event_id %s ignored.", event_id)
-            return
+            verify_result = await db.execute(
+                select(Email).where(
+                    Email.source_event_id == event_id
+                )
+            )
+            if verify_result.scalar_one_or_none() is not None:
+                try:
+                    await _delete_spool(spool_path)
+                except Exception:
+                    logger.exception("Could not delete spool file: %s", spool_path)
+                logger.info("Duplicate source_event_id %s ignored.", event_id)
+                return
+            raise
 
         await redis_client.publish(
             f"inbox:{inbox.id}:events",
             str(email.id),
         )
 
-    # Keep the raw spool file until the database commit succeeds.
+    # After successful DB commit, delete spool file.
     try:
-        await asyncio.to_thread(spool_path.unlink, missing_ok=True)
-    except OSError:
+        await asyncio.to_thread(
+            safe_delete_spool_file,
+            spool_path,
+            missing_ok=True,
+        )
+    except Exception:
         logger.exception("Could not delete spool file: %s", spool_path)
 
-    logger.info("Email saved for recipient %s", recipient)
+    logger.info("Email saved for recipient %s", recipient)
