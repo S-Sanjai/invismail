@@ -13,7 +13,6 @@ import logging
 import os
 import uuid
 from datetime import datetime, timezone
-from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Request
 from sqlalchemy import select
@@ -22,7 +21,11 @@ from app.core.database import SessionLocal
 from app.core.redis import redis_client
 from app.models.inbox import Inbox
 from app.services.storage_service import SPOOL_DIR, safe_delete_spool_file
-from app.services.mailgun import normalize_recipient, parse_mailgun_form, verify_mailgun_signature
+from app.services.mailgun import (
+    normalize_recipient,
+    parse_mailgun_form,
+    verify_mailgun_signature,
+)
 
 logger = logging.getLogger("invismail.mailgun")
 router = APIRouter(prefix="/api/v1/inbound", tags=["Inbound email"])
