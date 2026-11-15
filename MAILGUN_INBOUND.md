@@ -66,7 +66,7 @@ In Mailgun, open **Receiving → Routes** and add a route with:
 **Expression**
 
 ```text
-match_recipient(".*@testingtemp\\.publicvm\\.com")
+match_recipient(".*@testingtemp[.]publicvm[.]com")
 ```
 
 **Action**
