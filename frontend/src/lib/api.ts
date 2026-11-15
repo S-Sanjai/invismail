@@ -4,6 +4,8 @@ export interface InboxSession {
   access_token: string;
   expires_at: string;
   status: string;
+  created_at?: string;
+  ttl_seconds?: number;
 }
 
 export interface EmailListItem {
