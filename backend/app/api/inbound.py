@@ -15,6 +15,7 @@ import uuid
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException, Request
+from starlette.datastructures import UploadFile
 from sqlalchemy import select
 
 from app.core.database import SessionLocal
@@ -105,15 +106,66 @@ async def receive_mailgun_raw_mime(request: Request):
         logger.error("Mailgun webhook received but signing key is not configured")
         raise HTTPException(status_code=503, detail="Inbound email provider is not configured")
 
-    content_type = request.headers.get("content-type", "").split(";", 1)[0].strip().lower()
-    if content_type != "application/x-www-form-urlencoded":
-        raise HTTPException(status_code=406, detail="Expected URL-encoded Mailgun MIME payload")
+    content_type_header = request.headers.get("content-type", "")
+    content_type = content_type_header.split(";", 1)[0].strip().lower()
+    if content_type not in {
+        "application/x-www-form-urlencoded",
+        "multipart/form-data",
+    }:
+        raise HTTPException(
+            status_code=406,
+            detail=f"Unsupported Mailgun Content-Type: {content_type or 'missing'}",
+        )
 
     raw_body = await _read_bounded_body(request)
-    try:
-        fields = parse_mailgun_form(raw_body)
-    except ValueError as exc:
-        raise HTTPException(status_code=406, detail=str(exc)) from exc
+    if content_type == "application/x-www-form-urlencoded":
+        try:
+            fields = parse_mailgun_form(raw_body)
+        except ValueError as exc:
+            raise HTTPException(status_code=406, detail=str(exc)) from exc
+    else:
+        # Parse a replay of the already size-limited request body. Mailgun uses
+        # multipart/form-data for some Route forwards (notably messages with
+        # attachments), so accepting only URL-encoded payloads rejects valid mail.
+        delivered = False
+
+        async def replay_receive():
+            nonlocal delivered
+            if delivered:
+                return {"type": "http.disconnect"}
+            delivered = True
+            return {"type": "http.request", "body": raw_body, "more_body": False}
+
+        replay_request = Request(request.scope, receive=replay_receive)
+        try:
+            form = await replay_request.form(
+                max_files=50,
+                max_fields=2000,
+                max_part_size=MAX_WEBHOOK_REQUEST_BYTES,
+            )
+            fields = {}
+            for name in ("timestamp", "token", "signature", "recipient", "sender", "body-mime"):
+                values = form.getlist(name)
+                if len(values) > 1:
+                    raise ValueError(f"Unexpected repeated Mailgun field: {name}")
+                if values:
+                    value = values[0]
+                    if isinstance(value, UploadFile):
+                        value = await value.read(MAX_EMAIL_SIZE + 1)
+                    if isinstance(value, bytes):
+                        fields[name] = value
+                    elif isinstance(value, str):
+                        fields[name] = value
+                    else:
+                        raise ValueError(f"Invalid Mailgun field type: {name}")
+            await form.close()
+        except Exception as exc:
+            if isinstance(exc, HTTPException):
+                raise
+            raise HTTPException(
+                status_code=406,
+                detail="Malformed Mailgun multipart payload",
+            ) from exc
 
     timestamp = fields.get("timestamp", "")
     token = fields.get("token", "")
@@ -131,10 +183,15 @@ async def receive_mailgun_raw_mime(request: Request):
     except ValueError as exc:
         raise HTTPException(status_code=406, detail=str(exc)) from exc
 
-    mime_text = fields.get("body-mime")
-    if not mime_text:
+    mime_value = fields.get("body-mime")
+    if not mime_value:
         raise HTTPException(status_code=406, detail="Mailgun payload does not contain body-mime")
-    mime_bytes = mime_text.encode("utf-8", errors="surrogateescape")
+    if isinstance(mime_value, bytes):
+        mime_bytes = mime_value
+    else:
+        # MIME transfer encodings (base64/quoted-printable) keep binary body
+        # content ASCII-safe; UTF-8 is used for non-ASCII header/body octets.
+        mime_bytes = mime_value.encode("utf-8", errors="surrogateescape")
     if not mime_bytes or len(mime_bytes) > MAX_EMAIL_SIZE:
         raise HTTPException(status_code=406, detail="Email exceeds configured size limit")
 
