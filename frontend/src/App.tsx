@@ -352,6 +352,7 @@ function App() {
                   <Clock3 size={14} />
                   <span>Expires in</span>
                   <strong>{remaining}</strong>
+                  <span className="ttl-next-label">Next:</span>
                   <select value={ttl} onChange={(event) => setTtl(Number(event.target.value))} aria-label="Lifetime for the next address" title="Applied when you create the next address">
                     {TTL_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
                   </select>
