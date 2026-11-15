@@ -123,7 +123,6 @@ function App() {
   const firstLoad = useRef(true);
 
   const remaining = inbox ? formatRemaining(inbox.expires_at, now) : "--:--";
-  const isExpired = inbox ? new Date(inbox.expires_at).getTime() <= now : false;
   const unreadCount = messages.filter((message) => !message.is_read).length;
 
   const filteredMessages = useMemo(() => {
