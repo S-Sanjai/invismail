@@ -10,3 +10,7 @@ __pycache__/
 storage/spool/*
 storage/attachments/*
 .env.*
+# Frontend build artifacts
+frontend/node_modules/
+frontend/dist/
+frontend/*.tsbuildinfo
