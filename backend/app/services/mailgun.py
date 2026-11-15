@@ -4,6 +4,9 @@ import hmac
 from email.utils import getaddresses
 from urllib.parse import parse_qs
 
+from starlette.datastructures import UploadFile
+from starlette.requests import Request
+
 
 def verify_mailgun_signature(
     timestamp: str,
@@ -58,3 +61,65 @@ def normalize_recipient(value: str) -> str:
     if len(address) > 320 or any(ch.isspace() for ch in address):
         raise ValueError("Invalid recipient address")
     return address
+
+
+async def parse_mailgun_multipart(
+    content_type_header: str,
+    raw_body: bytes,
+    max_part_size: int,
+) -> dict[str, str | bytes]:
+    """Parse a bounded Mailgun multipart Route payload.
+
+    Mailgun uses multipart/form-data when an incoming email has attachments.
+    This parser intentionally retains only the fields needed by the raw-MIME
+    ingestion adapter and rejects duplicate security or message fields.
+    """
+    scope = {
+        "type": "http",
+        "asgi": {"version": "3.0"},
+        "http_version": "1.1",
+        "method": "POST",
+        "scheme": "https",
+        "path": "/",
+        "raw_path": b"/",
+        "query_string": b"",
+        "root_path": "",
+        "headers": [(b"content-type", content_type_header.encode("latin-1"))],
+        "client": ("127.0.0.1", 0),
+        "server": ("localhost", 443),
+    }
+    delivered = False
+
+    async def receive():
+        nonlocal delivered
+        if delivered:
+            return {"type": "http.disconnect"}
+        delivered = True
+        return {"type": "http.request", "body": raw_body, "more_body": False}
+
+    request = Request(scope, receive=receive)
+    form = await request.form(
+        max_files=50,
+        max_fields=2000,
+        max_part_size=max_part_size,
+    )
+    try:
+        fields: dict[str, str | bytes] = {}
+        for name in ("timestamp", "token", "signature", "recipient", "sender", "body-mime"):
+            values = form.getlist(name)
+            if len(values) > 1:
+                raise ValueError(f"Unexpected repeated Mailgun field: {name}")
+            if not values:
+                continue
+            value = values[0]
+            if isinstance(value, UploadFile):
+                value = await value.read(max_part_size + 1)
+            if isinstance(value, bytes):
+                fields[name] = value
+            elif isinstance(value, str):
+                fields[name] = value
+            else:
+                raise ValueError(f"Invalid Mailgun field type: {name}")
+        return fields
+    finally:
+        await form.close()
