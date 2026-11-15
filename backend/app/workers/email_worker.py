@@ -283,56 +283,42 @@ async def move_to_dead_letter(
         last_error_key(event_id),
     ]
 
-    redis = redis_client
-    eval_fn = getattr(redis, "eval", None)
-
-    # Prefer Lua scripting for atomic conditional handoff.
-    if callable(eval_fn):
-        try:
-            result = await eval_fn(DLQ_HANDOFF_SCRIPT, len(keys), *keys, *argv)
-        except TypeError:
-            # Fall back to pipeline for clients/mocks without eval support.
-            result = None
-            pipe = redis.pipeline(transaction=True)
-            pipe.xadd(DLQ, dlq_data)
-            pipe.xack(STREAM, GROUP, event_id)
-            pipe.delete(
-                attempt_key(event_id),
-                last_attempt_key(event_id),
-                last_error_key(event_id),
-            )
-            pipe_result = await pipe.execute()
-            if not pipe_result or len(pipe_result) < 3:
-                raise RuntimeError("DLQ handoff transaction failed")
-            result = 1
-        if result == 0:
-            logger.info(
-                "Event %s is no longer pending; DLQ record not created.",
-                event_id,
-            )
-            return
-        if result is None:
-            raise RuntimeError("DLQ handoff script failed")
-
+    eval_fn = getattr(redis_client, "eval", None)
+    if not callable(eval_fn):
         logger.error(
-            "Event %s moved to DLQ after %s attempts.",
+            "Redis eval is unavailable; DLQ handoff failed for event %s.",
             event_id,
-            attempts,
+        )
+        raise RuntimeError("Redis eval is unavailable")
+
+    try:
+        result = await eval_fn(
+            DLQ_HANDOFF_SCRIPT,
+            len(keys),
+            *keys,
+            *argv,
+        )
+    except Exception:
+        logger.exception(
+            "DLQ handoff script failed for event %s.",
+            event_id,
+        )
+        raise
+
+    if result == 0:
+        logger.info(
+            "Event %s is no longer pending; DLQ record not created.",
+            event_id,
         )
         return
 
-    # No eval support: use transactional pipeline.
-    pipe = redis.pipeline(transaction=True)
-    pipe.xadd(DLQ, dlq_data)
-    pipe.xack(STREAM, GROUP, event_id)
-    pipe.delete(
-        attempt_key(event_id),
-        last_attempt_key(event_id),
-        last_error_key(event_id),
-    )
-    pipe_result = await pipe.execute()
-    if not pipe_result or len(pipe_result) < 3:
-        raise RuntimeError("DLQ handoff transaction failed")
+    if result != 1:
+        logger.error(
+            "DLQ handoff script returned unexpected result %r for event %s.",
+            result,
+            event_id,
+        )
+        raise RuntimeError("DLQ handoff script failed")
 
     logger.error(
         "Event %s moved to DLQ after %s attempts.",

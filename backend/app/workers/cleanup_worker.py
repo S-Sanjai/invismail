@@ -253,9 +253,14 @@ async def _collect_protected_spool_paths():
                         if not path:
                             return None
                         try:
-                            protected.add(Path(path).resolve())
+                            resolved = Path(path).resolve()
                         except (OSError, ValueError):
                             return None
+                        try:
+                            resolved.relative_to(_spool_dir().resolve())
+                        except ValueError:
+                            return None
+                        protected.add(resolved)
 
                 if len(batch) < 100:
                     break
@@ -289,11 +294,17 @@ async def _collect_protected_spool_paths():
                     break
                 for msg_id, fields in batch:
                     path = _as_text((fields or {}).get("spool_path"))
-                    if path:
-                        try:
-                            protected.add(Path(path).resolve())
-                        except (OSError, ValueError):
-                            pass
+                    if not path:
+                        return None
+                    try:
+                        resolved = Path(path).resolve()
+                    except (OSError, ValueError):
+                        return None
+                    try:
+                        resolved.relative_to(_spool_dir().resolve())
+                    except ValueError:
+                        return None
+                    protected.add(resolved)
                 if len(batch) < 100:
                     break
                 last_id = _as_text(batch[-1][0])
@@ -402,12 +413,18 @@ async def cleanup_orphaned_spool_files(
         if suffix == ".tmp":
             try:
                 if now - mtime >= grace_period_seconds:
-                    await asyncio.to_thread(
+                    deleted = await asyncio.to_thread(
                         _safe_delete,
                         file_path,
                         missing_ok=True,
                     )
-                    removed_tmp += 1
+                    if deleted:
+                        removed_tmp += 1
+                    else:
+                        logger.warning(
+                            "Could not remove spool temp file: %s",
+                            file_path,
+                        )
             except OSError:
                 logger.exception("Could not remove spool temp file: %s", file_path)
             continue
@@ -429,12 +446,17 @@ async def cleanup_orphaned_spool_files(
             continue
 
         try:
-            await asyncio.to_thread(
+            deleted = await asyncio.to_thread(
                 _safe_delete,
                 file_path,
                 missing_ok=True,
             )
-            removed_eml += 1
+            if deleted:
+                removed_eml += 1
+            else:
+                logger.warning(
+                    "Could not remove spool file: %s", file_path
+                )
         except OSError:
             logger.exception("Could not remove spool file: %s", file_path)
 

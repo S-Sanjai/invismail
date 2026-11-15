@@ -59,19 +59,48 @@ def _spool_dir():
 
 
 def safe_delete_spool_file(path, missing_ok=True):
-    """Delete a spool file only if it resolves inside SPOOL_DIR."""
+    """Delete a spool file only if its parent resolves inside SPOOL_DIR.
+
+    The final path component is not resolved, so a symlink is unlinked
+    itself rather than followed to an external target.
+    """
     try:
         spool_dir = _spool_dir().resolve()
-        target = Path(path).resolve()
-    except (TypeError, ValueError, OSError):
-        logger.exception("Could not resolve spool path: %s", path)
+    except (TypeError, ValueError, OSError, RuntimeError):
+        logger.exception("Could not resolve spool directory: %s", path)
         return False
 
     try:
-        target.relative_to(spool_dir)
-    except ValueError:
-        logger.warning("Refused to delete spool path outside spool dir: %s", target)
+        candidate = Path(path)
+    except (TypeError, ValueError):
+        logger.exception("Could not interpret spool path: %s", path)
         return False
+
+    if candidate.is_absolute():
+        full = candidate
+    else:
+        full = spool_dir / candidate
+
+    if full.name in ("", ".", ".."):
+        logger.warning("Refused to delete invalid spool path: %s", path)
+        return False
+
+    parent = full.parent
+    try:
+        resolved_parent = parent.resolve(strict=False)
+    except (OSError, RuntimeError, ValueError):
+        logger.exception("Could not resolve spool parent: %s", path)
+        return False
+
+    try:
+        resolved_parent.relative_to(spool_dir)
+    except ValueError:
+        logger.warning(
+            "Refused to delete spool path outside spool dir: %s", path
+        )
+        return False
+
+    target = resolved_parent / full.name
 
     try:
         target.unlink(missing_ok=missing_ok)

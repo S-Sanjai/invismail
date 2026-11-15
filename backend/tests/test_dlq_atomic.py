@@ -1,6 +1,5 @@
-import time
 import os
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -8,12 +7,12 @@ import app.workers.email_worker as ew
 
 
 class FakeRedis:
-    def __init__(self, eval_result=1):
+    def __init__(self, eval_result=1, has_eval=True):
         self.eval_result = eval_result
+        self.has_eval = has_eval
         self.eval_called = False
         self.eval_args = None
-        self.pipe = None
-        self.executed = False
+        self.pipeline_called = False
 
     async def eval(self, script, numkeys, *args):
         self.eval_called = True
@@ -23,28 +22,8 @@ class FakeRedis:
         return self.eval_result
 
     def pipeline(self, transaction=True):
-        self.tx = transaction
-        self.pipe = FakePipe(self)
-        return self.pipe
-
-
-class FakePipe:
-    def __init__(self, redis):
-        self.redis = redis
-        self.calls = []
-
-    def xadd(self, *a, **k):
-        self.calls.append(("xadd", a, k))
-
-    def xack(self, *a, **k):
-        self.calls.append(("xack", a, k))
-
-    def delete(self, *a, **k):
-        self.calls.append(("delete", a, k))
-
-    async def execute(self):
-        self.redis.executed = True
-        return [1, 1, 1]
+        self.pipeline_called = True
+        raise AssertionError("non-atomic fallback was attempted")
 
 
 @pytest.mark.asyncio
@@ -54,11 +33,12 @@ async def test_move_to_dead_letter_uses_eval(monkeypatch):
     monkeypatch.setenv("SPOOL_DLQ_RETENTION_SECONDS", "3600")
     await ew.move_to_dead_letter("e1", {"spool_path": "/tmp/x.eml", "recipient": "a@b"}, 3, "boom")
     assert fr.eval_called is True
-    # eval receives stream/group/dlq keys
     script, numkeys, args = fr.eval_args
     assert numkeys == 6
     assert "XPENDING" in script
     assert "XADD" in script
+    assert "XACK" in script
+    assert fr.pipeline_called is False
 
 
 @pytest.mark.asyncio
@@ -68,8 +48,7 @@ async def test_already_acknowledged_does_not_create_dlq(monkeypatch):
     monkeypatch.setenv("SPOOL_DLQ_RETENTION_SECONDS", "3600")
     await ew.move_to_dead_letter("e2", {"spool_path": "/tmp/y.eml"}, 1, "err")
     assert fr.eval_called is True
-    # No pipeline fallback executed
-    assert fr.executed is False
+    assert fr.pipeline_called is False
 
 
 @pytest.mark.asyncio
@@ -79,21 +58,13 @@ async def test_script_failure_propagates(monkeypatch):
     monkeypatch.setenv("SPOOL_DLQ_RETENTION_SECONDS", "3600")
     with pytest.raises(RuntimeError):
         await ew.move_to_dead_letter("e3", {"spool_path": "/tmp/z.eml"}, 1, "err")
+    assert fr.pipeline_called is False
 
 
 @pytest.mark.asyncio
-async def test_pipeline_fallback_when_no_eval(monkeypatch):
-    class NoEvalRedis:
-        def __init__(self):
-            self.pipeline_called = False
-            self.pipe = FakePipe(self)
-
-        def pipeline(self, transaction=True):
-            self.pipeline_called = True
-            return self.pipe
-
-    fr = NoEvalRedis()
+async def test_eval_unavailable_fails_safely(monkeypatch):
+    fr = MagicMock(spec=[])  # no eval attribute
     monkeypatch.setattr(ew, "redis_client", fr)
     monkeypatch.setenv("SPOOL_DLQ_RETENTION_SECONDS", "3600")
-    await ew.move_to_dead_letter("e4", {"spool_path": "/tmp/w.eml"}, 2, "err")
-    assert fr.pipeline_called is True
+    with pytest.raises(RuntimeError):
+        await ew.move_to_dead_letter("e4", {"spool_path": "/tmp/w.eml"}, 2, "err")
