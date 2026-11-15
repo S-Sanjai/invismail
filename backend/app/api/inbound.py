@@ -15,7 +15,6 @@ import uuid
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException, Request
-from starlette.datastructures import UploadFile
 from sqlalchemy import select
 
 from app.core.database import SessionLocal
@@ -25,6 +24,7 @@ from app.services.storage_service import SPOOL_DIR, safe_delete_spool_file
 from app.services.mailgun import (
     normalize_recipient,
     parse_mailgun_form,
+    parse_mailgun_multipart,
     verify_mailgun_signature,
 )
 
@@ -118,54 +118,30 @@ async def receive_mailgun_raw_mime(request: Request):
         )
 
     raw_body = await _read_bounded_body(request)
-    if content_type == "application/x-www-form-urlencoded":
-        try:
+    try:
+        if content_type == "application/x-www-form-urlencoded":
             fields = parse_mailgun_form(raw_body)
-        except ValueError as exc:
-            raise HTTPException(status_code=406, detail=str(exc)) from exc
-    else:
-        # Parse a replay of the already size-limited request body. Mailgun uses
-        # multipart/form-data for some Route forwards (notably messages with
-        # attachments), so accepting only URL-encoded payloads rejects valid mail.
-        delivered = False
-
-        async def replay_receive():
-            nonlocal delivered
-            if delivered:
-                return {"type": "http.disconnect"}
-            delivered = True
-            return {"type": "http.request", "body": raw_body, "more_body": False}
-
-        replay_request = Request(request.scope, receive=replay_receive)
-        try:
-            form = await replay_request.form(
-                max_files=50,
-                max_fields=2000,
-                max_part_size=MAX_WEBHOOK_REQUEST_BYTES,
+        else:
+            fields = await parse_mailgun_multipart(
+                content_type_header,
+                raw_body,
+                MAX_WEBHOOK_REQUEST_BYTES,
             )
-            fields = {}
-            for name in ("timestamp", "token", "signature", "recipient", "sender", "body-mime"):
-                values = form.getlist(name)
-                if len(values) > 1:
-                    raise ValueError(f"Unexpected repeated Mailgun field: {name}")
-                if values:
-                    value = values[0]
-                    if isinstance(value, UploadFile):
-                        value = await value.read(MAX_EMAIL_SIZE + 1)
-                    if isinstance(value, bytes):
-                        fields[name] = value
-                    elif isinstance(value, str):
-                        fields[name] = value
-                    else:
-                        raise ValueError(f"Invalid Mailgun field type: {name}")
-            await form.close()
-        except Exception as exc:
-            if isinstance(exc, HTTPException):
-                raise
+    except Exception as exc:
+        raise HTTPException(
+            status_code=406,
+            detail="Malformed Mailgun form payload",
+        ) from exc
+
+    # Mailgun's signed envelope fields must be normal form values, not uploaded files.
+    for required_field in ("timestamp", "token", "signature", "recipient"):
+        if not isinstance(fields.get(required_field), str):
             raise HTTPException(
                 status_code=406,
-                detail="Malformed Mailgun multipart payload",
-            ) from exc
+                detail=f"Missing or invalid Mailgun field: {required_field}",
+            )
+    if not isinstance(fields.get("body-mime"), (str, bytes)):
+        raise HTTPException(status_code=406, detail="Mailgun payload does not contain body-mime")
 
     timestamp = fields.get("timestamp", "")
     token = fields.get("token", "")
