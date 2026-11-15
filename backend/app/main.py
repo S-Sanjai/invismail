@@ -5,7 +5,11 @@ ROOT = Path(__file__).resolve().parents[2]  # Adjusted to go up two levels to re
 # Load environment variables from .env file
 load_dotenv(ROOT / ".env")
 
-from fastapi import FastAPI
+import logging
+
+from fastapi import FastAPI, Request
+from fastapi.exception_handlers import http_exception_handler
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.core.logging import setup_logging
 
@@ -29,6 +33,18 @@ app.include_router(inbox_router)
 app.include_router(message_router)
 app.include_router(events_router)
 app.include_router(inbound_router)
+
+
+@app.exception_handler(StarletteHTTPException)
+async def log_mailgun_http_rejections(request: Request, exc: StarletteHTTPException):
+    if request.url.path == "/api/v1/inbound/mailgun/raw-mime":
+        logging.getLogger("invismail.mailgun").warning(
+            "Mailgun inbound rejected: status=%s detail=%s",
+            exc.status_code,
+            exc.detail,
+        )
+    return await http_exception_handler(request, exc)
+
 
 @app.get("/health")
 async def health():
