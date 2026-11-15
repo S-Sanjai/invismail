@@ -161,7 +161,7 @@ function App() {
   }, [ttl]);
 
   const refreshMessages = useCallback(async (quiet = false) => {
-    if (!inbox || refreshInFlight.current || isExpired) return;
+    if (!inbox || refreshInFlight.current || new Date(inbox.expires_at).getTime() <= Date.now()) return;
     refreshInFlight.current = true;
     if (!quiet) setLoadingMessages(true);
     try {
@@ -177,7 +177,7 @@ function App() {
       refreshInFlight.current = false;
       setLoadingMessages(false);
     }
-  }, [inbox, isExpired]);
+  }, [inbox]);
 
   useEffect(() => {
     if (!inbox && !createStarted.current) {
@@ -196,12 +196,12 @@ function App() {
   }, []);
 
   useEffect(() => {
-    if (!inbox || isExpired) return;
+    if (!inbox) return;
     void refreshMessages(firstLoad.current ? false : true);
     firstLoad.current = false;
     const poll = window.setInterval(() => void refreshMessages(true), 5000);
     return () => window.clearInterval(poll);
-  }, [inbox, isExpired, refreshMessages]);
+  }, [inbox, refreshMessages]);
 
   useEffect(() => {
     if (!inbox || !selectedId) {
@@ -273,7 +273,7 @@ function App() {
       document.body.appendChild(anchor);
       anchor.click();
       anchor.remove();
-      URL.revokeObjectURL(url);
+      window.setTimeout(() => URL.revokeObjectURL(url), 1000);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Attachment download failed.");
     }
