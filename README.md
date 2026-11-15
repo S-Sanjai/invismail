@@ -4,7 +4,7 @@
 
 InvisMail lets a client create a temporary inbox, receive messages through a local SMTP service, and retrieve them through an authenticated REST API. Email ingestion and message processing are decoupled using Redis Streams. PostgreSQL stores inbox and message metadata, while the local filesystem stores raw email spool files and attachment contents.
 
-> **Project status:** Backend implementation for local development and testing. This repository contains the API, SMTP adapter, background workers, database migrations, tests, and Docker Compose configuration for the whole stack. It does not include a frontend application or public-domain email delivery configuration.
+> **Project status:** Backend implementation for local development and testing. This repository contains the API, SMTP adapter, optional Mailgun inbound adapter, background workers, database migrations, tests, and Docker Compose configuration for the whole stack. It does not include a frontend application. Direct public-domain SMTP deployment remains operator-managed.
 
 ---
 
@@ -20,6 +20,7 @@ InvisMail lets a client create a temporary inbox, receive messages through a loc
 - [Environment variables](#environment-variables)
 - [API reference](#api-reference)
 - [Sending test emails](#sending-test-emails)
+- [Mailgun inbound integration](#mailgun-inbound-integration)
 - [Database and storage](#database-and-storage)
 - [Testing](#testing)
 - [Security considerations](#security-considerations)
@@ -655,3 +656,20 @@ Contributions, bug reports, and suggestions are welcome.
 ## License
 
 No license file is currently present in the repository. Until a license is added, do not assume that the project grants permission for reuse, redistribution, or modification.
+
+
+## Mailgun inbound integration
+
+InvisMail includes an optional signed Mailgun Routes adapter for development machines that cannot accept direct inbound SMTP connections (for example, a laptop behind carrier-grade NAT).
+
+The endpoint receives Mailgun's original MIME message, validates the account HTTP webhook signing key, checks the active recipient, and publishes the same Redis Stream event consumed by the existing email worker.
+
+See [MAILGUN_INBOUND.md](MAILGUN_INBOUND.md) for DNS, webhook signing-key, Cloudflare Quick Tunnel, Mailgun Route, and end-to-end test instructions.
+
+The adapter endpoint is:
+
+```text
+POST /api/v1/inbound/mailgun/raw-mime
+```
+
+Set `MAILGUN_WEBHOOK_SIGNING_KEY` in the root `.env` file. Never commit this secret. Mailgun's Route destination must end in `mime` to receive the `body-mime` field.
