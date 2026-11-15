@@ -12,7 +12,7 @@ def verify_mailgun_signature(
     signing_key: str,
 ) -> bool:
     """Verify a Mailgun Routes HMAC-SHA256 signature."""
-    if not timestamp.isdigit() or not token or not signature:
+    if not timestamp.isascii() or not timestamp.isdigit() or len(timestamp) > 12 or not token or not signature:
         return False
     expected = hmac.new(
         signing_key.encode("utf-8"),
