@@ -222,6 +222,26 @@ def _dlq_retention_seconds():
     return int(value)
 
 
+DLQ_HANDOFF_SCRIPT = """
+local stream = KEYS[1]
+local group = KEYS[2]
+local dlq = KEYS[3]
+local event_id = ARGV[1]
+
+local pending = redis.call('XPENDING', stream, group, event_id, event_id, 1)
+if (not pending) or (#pending == 0) then
+    return 0
+end
+
+redis.call('XADD', dlq, unpack(ARGV, 2))
+redis.call('XACK', stream, group, event_id)
+for i = 4, #KEYS do
+    redis.call('DEL', KEYS[i])
+end
+return 1
+"""
+
+
 async def move_to_dead_letter(
     event_id,
     event_data,
@@ -229,8 +249,8 @@ async def move_to_dead_letter(
     failure_reason,
 ):
     """
-    Move a failed event to the DLQ and acknowledge the
-    original event in one Redis transaction.
+    Conditionally move a failed event to the DLQ and acknowledge
+    the original event using an atomic Redis Lua script.
     """
 
     failed_at = time.time()
@@ -248,7 +268,61 @@ async def move_to_dead_letter(
         "spool_expires_at": str(spool_expires_at),
     }
 
-    pipe = redis_client.pipeline(transaction=True)
+    # Flatten DLQ data into ARGV pairs, prefixed by '*' for XADD id.
+    argv = [as_text(event_id), "*"]
+    for key, value in dlq_data.items():
+        argv.append(str(key))
+        argv.append(str(value))
+
+    keys = [
+        STREAM,
+        GROUP,
+        DLQ,
+        attempt_key(event_id),
+        last_attempt_key(event_id),
+        last_error_key(event_id),
+    ]
+
+    redis = redis_client
+    eval_fn = getattr(redis, "eval", None)
+
+    # Prefer Lua scripting for atomic conditional handoff.
+    if callable(eval_fn):
+        try:
+            result = await eval_fn(DLQ_HANDOFF_SCRIPT, len(keys), *keys, *argv)
+        except TypeError:
+            # Fall back to pipeline for clients/mocks without eval support.
+            result = None
+            pipe = redis.pipeline(transaction=True)
+            pipe.xadd(DLQ, dlq_data)
+            pipe.xack(STREAM, GROUP, event_id)
+            pipe.delete(
+                attempt_key(event_id),
+                last_attempt_key(event_id),
+                last_error_key(event_id),
+            )
+            pipe_result = await pipe.execute()
+            if not pipe_result or len(pipe_result) < 3:
+                raise RuntimeError("DLQ handoff transaction failed")
+            result = 1
+        if result == 0:
+            logger.info(
+                "Event %s is no longer pending; DLQ record not created.",
+                event_id,
+            )
+            return
+        if result is None:
+            raise RuntimeError("DLQ handoff script failed")
+
+        logger.error(
+            "Event %s moved to DLQ after %s attempts.",
+            event_id,
+            attempts,
+        )
+        return
+
+    # No eval support: use transactional pipeline.
+    pipe = redis.pipeline(transaction=True)
     pipe.xadd(DLQ, dlq_data)
     pipe.xack(STREAM, GROUP, event_id)
     pipe.delete(
@@ -256,11 +330,8 @@ async def move_to_dead_letter(
         last_attempt_key(event_id),
         last_error_key(event_id),
     )
-
-    results = await pipe.execute()
-
-    # Verify the transaction result (XACK returns number acknowledged).
-    if not results or len(results) < 3:
+    pipe_result = await pipe.execute()
+    if not pipe_result or len(pipe_result) < 3:
         raise RuntimeError("DLQ handoff transaction failed")
 
     logger.error(

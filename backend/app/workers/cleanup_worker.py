@@ -10,6 +10,7 @@ from sqlalchemy import select
 from app.core.database import SessionLocal
 from app.models.inbox import Inbox
 from app.models.email import Email
+from app.models.attachment import Attachment
 from app.services.storage_service import ATTACHMENT_DIR
 from app.services import storage_service
 
@@ -76,16 +77,9 @@ def _dlq_retention_seconds():
 
 
 def _safe_delete(path, missing_ok=True):
-    try:
-        from app.services.storage_service import safe_delete_spool_file
-        return safe_delete_spool_file(path, missing_ok=missing_ok)
-    except Exception:
-        try:
-            Path(path).unlink(missing_ok=missing_ok)
-            return True
-        except OSError:
-            logger.exception("Could not delete spool file: %s", path)
-            return False
+    from app.services.storage_service import safe_delete_spool_file
+
+    return safe_delete_spool_file(path, missing_ok=missing_ok)
 
 
 async def cleanup_orphaned_attachment_files(
@@ -251,14 +245,17 @@ async def _collect_protected_spool_paths():
                         msgs = await redis_client.xrange(STREAM, msg_id, msg_id)
                     except Exception:
                         return None
-                    if msgs:
-                        for _mid, fields in msgs:
-                            path = _as_text((fields or {}).get("spool_path"))
-                            if path:
-                                try:
-                                    protected.add(Path(path).resolve())
-                                except (OSError, ValueError):
-                                    pass
+                    if not msgs:
+                        # Pending event could not be retrieved -> fail closed.
+                        return None
+                    for _mid, fields in msgs:
+                        path = _as_text((fields or {}).get("spool_path"))
+                        if not path:
+                            return None
+                        try:
+                            protected.add(Path(path).resolve())
+                        except (OSError, ValueError):
+                            return None
 
                 if len(batch) < 100:
                     break
@@ -405,7 +402,11 @@ async def cleanup_orphaned_spool_files(
         if suffix == ".tmp":
             try:
                 if now - mtime >= grace_period_seconds:
-                    await asyncio.to_thread(file_path.unlink, missing_ok=True)
+                    await asyncio.to_thread(
+                        _safe_delete,
+                        file_path,
+                        missing_ok=True,
+                    )
                     removed_tmp += 1
             except OSError:
                 logger.exception("Could not remove spool temp file: %s", file_path)
@@ -428,7 +429,11 @@ async def cleanup_orphaned_spool_files(
             continue
 
         try:
-            await asyncio.to_thread(file_path.unlink, missing_ok=True)
+            await asyncio.to_thread(
+                _safe_delete,
+                file_path,
+                missing_ok=True,
+            )
             removed_eml += 1
         except OSError:
             logger.exception("Could not remove spool file: %s", file_path)

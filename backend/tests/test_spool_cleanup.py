@@ -86,6 +86,67 @@ async def test_recent_unreferenced_eml_kept(spool, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_deletion_failure_leaves_file(spool, monkeypatch):
+    f = spool / "orphan.eml"
+    make_file(f, age=7200)
+    fake = FakeRedis(groups=[{"name": "email-workers", "last-delivered-id": "0-0"}])
+    monkeypatch.setattr(cw, "redis_client", fake)
+    monkeypatch.setattr(cw, "_safe_delete", lambda *a, **k: False)
+    await cw.cleanup_orphaned_spool_files(grace_period_seconds=3600)
+    assert f.exists()
+
+
+@pytest.mark.asyncio
+async def test_unresolvable_pending_no_delete(spool, monkeypatch):
+    f = spool / "orphan.eml"
+    make_file(f, age=7200)
+    fake = FakeRedis(
+        groups=[{"name": "email-workers", "last-delivered-id": "0-0"}],
+        pending=[{"message_id": "9-0"}],
+        stream_msgs=[],  # pending event cannot be retrieved
+    )
+    monkeypatch.setattr(cw, "redis_client", fake)
+    await cw.cleanup_orphaned_spool_files(grace_period_seconds=3600)
+    assert f.exists()
+
+
+@pytest.mark.asyncio
+async def test_deletion_failure_leaves_file(spool, monkeypatch):
+    f = spool / "orphan.eml"
+    make_file(f, age=7200)
+    fake = FakeRedis(groups=[{"name": "email-workers", "last-delivered-id": "0-0"}])
+    monkeypatch.setattr(cw, "redis_client", fake)
+    monkeypatch.setattr(cw, "_safe_delete", lambda *a, **k: False)
+    await cw.cleanup_orphaned_spool_files(grace_period_seconds=3600)
+    assert f.exists()
+
+
+@pytest.mark.asyncio
+async def test_pending_missing_spool_path_no_delete(spool, monkeypatch):
+    f = spool / "orphan.eml"
+    make_file(f, age=7200)
+    fake = FakeRedis(
+        groups=[{"name": "email-workers", "last-delivered-id": "0-0"}],
+        pending=[{"message_id": "9-0"}],
+        stream_msgs=[("9-0", {})],  # no spool_path
+    )
+    monkeypatch.setattr(cw, "redis_client", fake)
+    await cw.cleanup_orphaned_spool_files(grace_period_seconds=3600)
+    assert f.exists()
+
+
+@pytest.mark.asyncio
+async def test_deletion_failure_leaves_file(spool, monkeypatch):
+    f = spool / "orphan.eml"
+    make_file(f, age=7200)
+    fake = FakeRedis(groups=[{"name": "email-workers", "last-delivered-id": "0-0"}])
+    monkeypatch.setattr(cw, "redis_client", fake)
+    monkeypatch.setattr(cw, "_safe_delete", lambda *a, **k: False)
+    await cw.cleanup_orphaned_spool_files(grace_period_seconds=3600)
+    assert f.exists()
+
+
+@pytest.mark.asyncio
 async def test_pending_protected(spool, monkeypatch):
     f = spool / "pending.eml"
     make_file(f, age=7200)
@@ -96,6 +157,67 @@ async def test_pending_protected(spool, monkeypatch):
     )
     # pending fetch uses xrange to get spool_path
     monkeypatch.setattr(cw, "redis_client", fake)
+    await cw.cleanup_orphaned_spool_files(grace_period_seconds=3600)
+    assert f.exists()
+
+
+@pytest.mark.asyncio
+async def test_deletion_failure_leaves_file(spool, monkeypatch):
+    f = spool / "orphan.eml"
+    make_file(f, age=7200)
+    fake = FakeRedis(groups=[{"name": "email-workers", "last-delivered-id": "0-0"}])
+    monkeypatch.setattr(cw, "redis_client", fake)
+    monkeypatch.setattr(cw, "_safe_delete", lambda *a, **k: False)
+    await cw.cleanup_orphaned_spool_files(grace_period_seconds=3600)
+    assert f.exists()
+
+
+@pytest.mark.asyncio
+async def test_unresolvable_pending_no_delete(spool, monkeypatch):
+    f = spool / "orphan.eml"
+    make_file(f, age=7200)
+    fake = FakeRedis(
+        groups=[{"name": "email-workers", "last-delivered-id": "0-0"}],
+        pending=[{"message_id": "9-0"}],
+        stream_msgs=[],  # pending event cannot be retrieved
+    )
+    monkeypatch.setattr(cw, "redis_client", fake)
+    await cw.cleanup_orphaned_spool_files(grace_period_seconds=3600)
+    assert f.exists()
+
+
+@pytest.mark.asyncio
+async def test_deletion_failure_leaves_file(spool, monkeypatch):
+    f = spool / "orphan.eml"
+    make_file(f, age=7200)
+    fake = FakeRedis(groups=[{"name": "email-workers", "last-delivered-id": "0-0"}])
+    monkeypatch.setattr(cw, "redis_client", fake)
+    monkeypatch.setattr(cw, "_safe_delete", lambda *a, **k: False)
+    await cw.cleanup_orphaned_spool_files(grace_period_seconds=3600)
+    assert f.exists()
+
+
+@pytest.mark.asyncio
+async def test_pending_missing_spool_path_no_delete(spool, monkeypatch):
+    f = spool / "orphan.eml"
+    make_file(f, age=7200)
+    fake = FakeRedis(
+        groups=[{"name": "email-workers", "last-delivered-id": "0-0"}],
+        pending=[{"message_id": "9-0"}],
+        stream_msgs=[("9-0", {})],  # no spool_path
+    )
+    monkeypatch.setattr(cw, "redis_client", fake)
+    await cw.cleanup_orphaned_spool_files(grace_period_seconds=3600)
+    assert f.exists()
+
+
+@pytest.mark.asyncio
+async def test_deletion_failure_leaves_file(spool, monkeypatch):
+    f = spool / "orphan.eml"
+    make_file(f, age=7200)
+    fake = FakeRedis(groups=[{"name": "email-workers", "last-delivered-id": "0-0"}])
+    monkeypatch.setattr(cw, "redis_client", fake)
+    monkeypatch.setattr(cw, "_safe_delete", lambda *a, **k: False)
     await cw.cleanup_orphaned_spool_files(grace_period_seconds=3600)
     assert f.exists()
 
@@ -115,6 +237,67 @@ async def test_undelivered_protected(spool, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_deletion_failure_leaves_file(spool, monkeypatch):
+    f = spool / "orphan.eml"
+    make_file(f, age=7200)
+    fake = FakeRedis(groups=[{"name": "email-workers", "last-delivered-id": "0-0"}])
+    monkeypatch.setattr(cw, "redis_client", fake)
+    monkeypatch.setattr(cw, "_safe_delete", lambda *a, **k: False)
+    await cw.cleanup_orphaned_spool_files(grace_period_seconds=3600)
+    assert f.exists()
+
+
+@pytest.mark.asyncio
+async def test_unresolvable_pending_no_delete(spool, monkeypatch):
+    f = spool / "orphan.eml"
+    make_file(f, age=7200)
+    fake = FakeRedis(
+        groups=[{"name": "email-workers", "last-delivered-id": "0-0"}],
+        pending=[{"message_id": "9-0"}],
+        stream_msgs=[],  # pending event cannot be retrieved
+    )
+    monkeypatch.setattr(cw, "redis_client", fake)
+    await cw.cleanup_orphaned_spool_files(grace_period_seconds=3600)
+    assert f.exists()
+
+
+@pytest.mark.asyncio
+async def test_deletion_failure_leaves_file(spool, monkeypatch):
+    f = spool / "orphan.eml"
+    make_file(f, age=7200)
+    fake = FakeRedis(groups=[{"name": "email-workers", "last-delivered-id": "0-0"}])
+    monkeypatch.setattr(cw, "redis_client", fake)
+    monkeypatch.setattr(cw, "_safe_delete", lambda *a, **k: False)
+    await cw.cleanup_orphaned_spool_files(grace_period_seconds=3600)
+    assert f.exists()
+
+
+@pytest.mark.asyncio
+async def test_pending_missing_spool_path_no_delete(spool, monkeypatch):
+    f = spool / "orphan.eml"
+    make_file(f, age=7200)
+    fake = FakeRedis(
+        groups=[{"name": "email-workers", "last-delivered-id": "0-0"}],
+        pending=[{"message_id": "9-0"}],
+        stream_msgs=[("9-0", {})],  # no spool_path
+    )
+    monkeypatch.setattr(cw, "redis_client", fake)
+    await cw.cleanup_orphaned_spool_files(grace_period_seconds=3600)
+    assert f.exists()
+
+
+@pytest.mark.asyncio
+async def test_deletion_failure_leaves_file(spool, monkeypatch):
+    f = spool / "orphan.eml"
+    make_file(f, age=7200)
+    fake = FakeRedis(groups=[{"name": "email-workers", "last-delivered-id": "0-0"}])
+    monkeypatch.setattr(cw, "redis_client", fake)
+    monkeypatch.setattr(cw, "_safe_delete", lambda *a, **k: False)
+    await cw.cleanup_orphaned_spool_files(grace_period_seconds=3600)
+    assert f.exists()
+
+
+@pytest.mark.asyncio
 async def test_dlq_within_retention_protected(spool, monkeypatch):
     f = spool / "dlq.eml"
     make_file(f, age=7200)
@@ -124,6 +307,67 @@ async def test_dlq_within_retention_protected(spool, monkeypatch):
         dlq_msgs=[("d-0", {"spool_path": str(f), "spool_expires_at": str(future)})],
     )
     monkeypatch.setattr(cw, "redis_client", fake)
+    await cw.cleanup_orphaned_spool_files(grace_period_seconds=3600)
+    assert f.exists()
+
+
+@pytest.mark.asyncio
+async def test_deletion_failure_leaves_file(spool, monkeypatch):
+    f = spool / "orphan.eml"
+    make_file(f, age=7200)
+    fake = FakeRedis(groups=[{"name": "email-workers", "last-delivered-id": "0-0"}])
+    monkeypatch.setattr(cw, "redis_client", fake)
+    monkeypatch.setattr(cw, "_safe_delete", lambda *a, **k: False)
+    await cw.cleanup_orphaned_spool_files(grace_period_seconds=3600)
+    assert f.exists()
+
+
+@pytest.mark.asyncio
+async def test_unresolvable_pending_no_delete(spool, monkeypatch):
+    f = spool / "orphan.eml"
+    make_file(f, age=7200)
+    fake = FakeRedis(
+        groups=[{"name": "email-workers", "last-delivered-id": "0-0"}],
+        pending=[{"message_id": "9-0"}],
+        stream_msgs=[],  # pending event cannot be retrieved
+    )
+    monkeypatch.setattr(cw, "redis_client", fake)
+    await cw.cleanup_orphaned_spool_files(grace_period_seconds=3600)
+    assert f.exists()
+
+
+@pytest.mark.asyncio
+async def test_deletion_failure_leaves_file(spool, monkeypatch):
+    f = spool / "orphan.eml"
+    make_file(f, age=7200)
+    fake = FakeRedis(groups=[{"name": "email-workers", "last-delivered-id": "0-0"}])
+    monkeypatch.setattr(cw, "redis_client", fake)
+    monkeypatch.setattr(cw, "_safe_delete", lambda *a, **k: False)
+    await cw.cleanup_orphaned_spool_files(grace_period_seconds=3600)
+    assert f.exists()
+
+
+@pytest.mark.asyncio
+async def test_pending_missing_spool_path_no_delete(spool, monkeypatch):
+    f = spool / "orphan.eml"
+    make_file(f, age=7200)
+    fake = FakeRedis(
+        groups=[{"name": "email-workers", "last-delivered-id": "0-0"}],
+        pending=[{"message_id": "9-0"}],
+        stream_msgs=[("9-0", {})],  # no spool_path
+    )
+    monkeypatch.setattr(cw, "redis_client", fake)
+    await cw.cleanup_orphaned_spool_files(grace_period_seconds=3600)
+    assert f.exists()
+
+
+@pytest.mark.asyncio
+async def test_deletion_failure_leaves_file(spool, monkeypatch):
+    f = spool / "orphan.eml"
+    make_file(f, age=7200)
+    fake = FakeRedis(groups=[{"name": "email-workers", "last-delivered-id": "0-0"}])
+    monkeypatch.setattr(cw, "redis_client", fake)
+    monkeypatch.setattr(cw, "_safe_delete", lambda *a, **k: False)
     await cw.cleanup_orphaned_spool_files(grace_period_seconds=3600)
     assert f.exists()
 
@@ -163,6 +407,67 @@ async def test_recent_tmp_kept(spool, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_deletion_failure_leaves_file(spool, monkeypatch):
+    f = spool / "orphan.eml"
+    make_file(f, age=7200)
+    fake = FakeRedis(groups=[{"name": "email-workers", "last-delivered-id": "0-0"}])
+    monkeypatch.setattr(cw, "redis_client", fake)
+    monkeypatch.setattr(cw, "_safe_delete", lambda *a, **k: False)
+    await cw.cleanup_orphaned_spool_files(grace_period_seconds=3600)
+    assert f.exists()
+
+
+@pytest.mark.asyncio
+async def test_unresolvable_pending_no_delete(spool, monkeypatch):
+    f = spool / "orphan.eml"
+    make_file(f, age=7200)
+    fake = FakeRedis(
+        groups=[{"name": "email-workers", "last-delivered-id": "0-0"}],
+        pending=[{"message_id": "9-0"}],
+        stream_msgs=[],  # pending event cannot be retrieved
+    )
+    monkeypatch.setattr(cw, "redis_client", fake)
+    await cw.cleanup_orphaned_spool_files(grace_period_seconds=3600)
+    assert f.exists()
+
+
+@pytest.mark.asyncio
+async def test_deletion_failure_leaves_file(spool, monkeypatch):
+    f = spool / "orphan.eml"
+    make_file(f, age=7200)
+    fake = FakeRedis(groups=[{"name": "email-workers", "last-delivered-id": "0-0"}])
+    monkeypatch.setattr(cw, "redis_client", fake)
+    monkeypatch.setattr(cw, "_safe_delete", lambda *a, **k: False)
+    await cw.cleanup_orphaned_spool_files(grace_period_seconds=3600)
+    assert f.exists()
+
+
+@pytest.mark.asyncio
+async def test_pending_missing_spool_path_no_delete(spool, monkeypatch):
+    f = spool / "orphan.eml"
+    make_file(f, age=7200)
+    fake = FakeRedis(
+        groups=[{"name": "email-workers", "last-delivered-id": "0-0"}],
+        pending=[{"message_id": "9-0"}],
+        stream_msgs=[("9-0", {})],  # no spool_path
+    )
+    monkeypatch.setattr(cw, "redis_client", fake)
+    await cw.cleanup_orphaned_spool_files(grace_period_seconds=3600)
+    assert f.exists()
+
+
+@pytest.mark.asyncio
+async def test_deletion_failure_leaves_file(spool, monkeypatch):
+    f = spool / "orphan.eml"
+    make_file(f, age=7200)
+    fake = FakeRedis(groups=[{"name": "email-workers", "last-delivered-id": "0-0"}])
+    monkeypatch.setattr(cw, "redis_client", fake)
+    monkeypatch.setattr(cw, "_safe_delete", lambda *a, **k: False)
+    await cw.cleanup_orphaned_spool_files(grace_period_seconds=3600)
+    assert f.exists()
+
+
+@pytest.mark.asyncio
 async def test_redis_unavailable_no_delete(spool, monkeypatch):
     f = spool / "orphan.eml"
     make_file(f, age=7200)
@@ -173,11 +478,133 @@ async def test_redis_unavailable_no_delete(spool, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_deletion_failure_leaves_file(spool, monkeypatch):
+    f = spool / "orphan.eml"
+    make_file(f, age=7200)
+    fake = FakeRedis(groups=[{"name": "email-workers", "last-delivered-id": "0-0"}])
+    monkeypatch.setattr(cw, "redis_client", fake)
+    monkeypatch.setattr(cw, "_safe_delete", lambda *a, **k: False)
+    await cw.cleanup_orphaned_spool_files(grace_period_seconds=3600)
+    assert f.exists()
+
+
+@pytest.mark.asyncio
+async def test_unresolvable_pending_no_delete(spool, monkeypatch):
+    f = spool / "orphan.eml"
+    make_file(f, age=7200)
+    fake = FakeRedis(
+        groups=[{"name": "email-workers", "last-delivered-id": "0-0"}],
+        pending=[{"message_id": "9-0"}],
+        stream_msgs=[],  # pending event cannot be retrieved
+    )
+    monkeypatch.setattr(cw, "redis_client", fake)
+    await cw.cleanup_orphaned_spool_files(grace_period_seconds=3600)
+    assert f.exists()
+
+
+@pytest.mark.asyncio
+async def test_deletion_failure_leaves_file(spool, monkeypatch):
+    f = spool / "orphan.eml"
+    make_file(f, age=7200)
+    fake = FakeRedis(groups=[{"name": "email-workers", "last-delivered-id": "0-0"}])
+    monkeypatch.setattr(cw, "redis_client", fake)
+    monkeypatch.setattr(cw, "_safe_delete", lambda *a, **k: False)
+    await cw.cleanup_orphaned_spool_files(grace_period_seconds=3600)
+    assert f.exists()
+
+
+@pytest.mark.asyncio
+async def test_pending_missing_spool_path_no_delete(spool, monkeypatch):
+    f = spool / "orphan.eml"
+    make_file(f, age=7200)
+    fake = FakeRedis(
+        groups=[{"name": "email-workers", "last-delivered-id": "0-0"}],
+        pending=[{"message_id": "9-0"}],
+        stream_msgs=[("9-0", {})],  # no spool_path
+    )
+    monkeypatch.setattr(cw, "redis_client", fake)
+    await cw.cleanup_orphaned_spool_files(grace_period_seconds=3600)
+    assert f.exists()
+
+
+@pytest.mark.asyncio
+async def test_deletion_failure_leaves_file(spool, monkeypatch):
+    f = spool / "orphan.eml"
+    make_file(f, age=7200)
+    fake = FakeRedis(groups=[{"name": "email-workers", "last-delivered-id": "0-0"}])
+    monkeypatch.setattr(cw, "redis_client", fake)
+    monkeypatch.setattr(cw, "_safe_delete", lambda *a, **k: False)
+    await cw.cleanup_orphaned_spool_files(grace_period_seconds=3600)
+    assert f.exists()
+
+
+@pytest.mark.asyncio
 async def test_missing_group_no_delete(spool, monkeypatch):
     f = spool / "orphan.eml"
     make_file(f, age=7200)
     fake = FakeRedis(groups=[])
     monkeypatch.setattr(cw, "redis_client", fake)
+    await cw.cleanup_orphaned_spool_files(grace_period_seconds=3600)
+    assert f.exists()
+
+
+@pytest.mark.asyncio
+async def test_deletion_failure_leaves_file(spool, monkeypatch):
+    f = spool / "orphan.eml"
+    make_file(f, age=7200)
+    fake = FakeRedis(groups=[{"name": "email-workers", "last-delivered-id": "0-0"}])
+    monkeypatch.setattr(cw, "redis_client", fake)
+    monkeypatch.setattr(cw, "_safe_delete", lambda *a, **k: False)
+    await cw.cleanup_orphaned_spool_files(grace_period_seconds=3600)
+    assert f.exists()
+
+
+@pytest.mark.asyncio
+async def test_unresolvable_pending_no_delete(spool, monkeypatch):
+    f = spool / "orphan.eml"
+    make_file(f, age=7200)
+    fake = FakeRedis(
+        groups=[{"name": "email-workers", "last-delivered-id": "0-0"}],
+        pending=[{"message_id": "9-0"}],
+        stream_msgs=[],  # pending event cannot be retrieved
+    )
+    monkeypatch.setattr(cw, "redis_client", fake)
+    await cw.cleanup_orphaned_spool_files(grace_period_seconds=3600)
+    assert f.exists()
+
+
+@pytest.mark.asyncio
+async def test_deletion_failure_leaves_file(spool, monkeypatch):
+    f = spool / "orphan.eml"
+    make_file(f, age=7200)
+    fake = FakeRedis(groups=[{"name": "email-workers", "last-delivered-id": "0-0"}])
+    monkeypatch.setattr(cw, "redis_client", fake)
+    monkeypatch.setattr(cw, "_safe_delete", lambda *a, **k: False)
+    await cw.cleanup_orphaned_spool_files(grace_period_seconds=3600)
+    assert f.exists()
+
+
+@pytest.mark.asyncio
+async def test_pending_missing_spool_path_no_delete(spool, monkeypatch):
+    f = spool / "orphan.eml"
+    make_file(f, age=7200)
+    fake = FakeRedis(
+        groups=[{"name": "email-workers", "last-delivered-id": "0-0"}],
+        pending=[{"message_id": "9-0"}],
+        stream_msgs=[("9-0", {})],  # no spool_path
+    )
+    monkeypatch.setattr(cw, "redis_client", fake)
+    await cw.cleanup_orphaned_spool_files(grace_period_seconds=3600)
+    assert f.exists()
+
+
+@pytest.mark.asyncio
+async def test_deletion_failure_leaves_file(spool, monkeypatch):
+    f = spool / "orphan.eml"
+    make_file(f, age=7200)
+    fake = FakeRedis(groups=[{"name": "email-workers", "last-delivered-id": "0-0"}])
+    monkeypatch.setattr(cw, "redis_client", fake)
+    monkeypatch.setattr(cw, "_safe_delete", lambda *a, **k: False)
     await cw.cleanup_orphaned_spool_files(grace_period_seconds=3600)
     assert f.exists()
 
@@ -197,6 +624,67 @@ async def test_legacy_dlq_failed_at(spool, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_deletion_failure_leaves_file(spool, monkeypatch):
+    f = spool / "orphan.eml"
+    make_file(f, age=7200)
+    fake = FakeRedis(groups=[{"name": "email-workers", "last-delivered-id": "0-0"}])
+    monkeypatch.setattr(cw, "redis_client", fake)
+    monkeypatch.setattr(cw, "_safe_delete", lambda *a, **k: False)
+    await cw.cleanup_orphaned_spool_files(grace_period_seconds=3600)
+    assert f.exists()
+
+
+@pytest.mark.asyncio
+async def test_unresolvable_pending_no_delete(spool, monkeypatch):
+    f = spool / "orphan.eml"
+    make_file(f, age=7200)
+    fake = FakeRedis(
+        groups=[{"name": "email-workers", "last-delivered-id": "0-0"}],
+        pending=[{"message_id": "9-0"}],
+        stream_msgs=[],  # pending event cannot be retrieved
+    )
+    monkeypatch.setattr(cw, "redis_client", fake)
+    await cw.cleanup_orphaned_spool_files(grace_period_seconds=3600)
+    assert f.exists()
+
+
+@pytest.mark.asyncio
+async def test_deletion_failure_leaves_file(spool, monkeypatch):
+    f = spool / "orphan.eml"
+    make_file(f, age=7200)
+    fake = FakeRedis(groups=[{"name": "email-workers", "last-delivered-id": "0-0"}])
+    monkeypatch.setattr(cw, "redis_client", fake)
+    monkeypatch.setattr(cw, "_safe_delete", lambda *a, **k: False)
+    await cw.cleanup_orphaned_spool_files(grace_period_seconds=3600)
+    assert f.exists()
+
+
+@pytest.mark.asyncio
+async def test_pending_missing_spool_path_no_delete(spool, monkeypatch):
+    f = spool / "orphan.eml"
+    make_file(f, age=7200)
+    fake = FakeRedis(
+        groups=[{"name": "email-workers", "last-delivered-id": "0-0"}],
+        pending=[{"message_id": "9-0"}],
+        stream_msgs=[("9-0", {})],  # no spool_path
+    )
+    monkeypatch.setattr(cw, "redis_client", fake)
+    await cw.cleanup_orphaned_spool_files(grace_period_seconds=3600)
+    assert f.exists()
+
+
+@pytest.mark.asyncio
+async def test_deletion_failure_leaves_file(spool, monkeypatch):
+    f = spool / "orphan.eml"
+    make_file(f, age=7200)
+    fake = FakeRedis(groups=[{"name": "email-workers", "last-delivered-id": "0-0"}])
+    monkeypatch.setattr(cw, "redis_client", fake)
+    monkeypatch.setattr(cw, "_safe_delete", lambda *a, **k: False)
+    await cw.cleanup_orphaned_spool_files(grace_period_seconds=3600)
+    assert f.exists()
+
+
+@pytest.mark.asyncio
 async def test_invalid_timestamps_protect(spool, monkeypatch):
     f = spool / "invalid.eml"
     make_file(f, age=7200)
@@ -205,6 +693,67 @@ async def test_invalid_timestamps_protect(spool, monkeypatch):
         dlq_msgs=[("d-0", {"spool_path": str(f), "failed_at": "not-a-number"})],
     )
     monkeypatch.setattr(cw, "redis_client", fake)
+    await cw.cleanup_orphaned_spool_files(grace_period_seconds=3600)
+    assert f.exists()
+
+
+@pytest.mark.asyncio
+async def test_deletion_failure_leaves_file(spool, monkeypatch):
+    f = spool / "orphan.eml"
+    make_file(f, age=7200)
+    fake = FakeRedis(groups=[{"name": "email-workers", "last-delivered-id": "0-0"}])
+    monkeypatch.setattr(cw, "redis_client", fake)
+    monkeypatch.setattr(cw, "_safe_delete", lambda *a, **k: False)
+    await cw.cleanup_orphaned_spool_files(grace_period_seconds=3600)
+    assert f.exists()
+
+
+@pytest.mark.asyncio
+async def test_unresolvable_pending_no_delete(spool, monkeypatch):
+    f = spool / "orphan.eml"
+    make_file(f, age=7200)
+    fake = FakeRedis(
+        groups=[{"name": "email-workers", "last-delivered-id": "0-0"}],
+        pending=[{"message_id": "9-0"}],
+        stream_msgs=[],  # pending event cannot be retrieved
+    )
+    monkeypatch.setattr(cw, "redis_client", fake)
+    await cw.cleanup_orphaned_spool_files(grace_period_seconds=3600)
+    assert f.exists()
+
+
+@pytest.mark.asyncio
+async def test_deletion_failure_leaves_file(spool, monkeypatch):
+    f = spool / "orphan.eml"
+    make_file(f, age=7200)
+    fake = FakeRedis(groups=[{"name": "email-workers", "last-delivered-id": "0-0"}])
+    monkeypatch.setattr(cw, "redis_client", fake)
+    monkeypatch.setattr(cw, "_safe_delete", lambda *a, **k: False)
+    await cw.cleanup_orphaned_spool_files(grace_period_seconds=3600)
+    assert f.exists()
+
+
+@pytest.mark.asyncio
+async def test_pending_missing_spool_path_no_delete(spool, monkeypatch):
+    f = spool / "orphan.eml"
+    make_file(f, age=7200)
+    fake = FakeRedis(
+        groups=[{"name": "email-workers", "last-delivered-id": "0-0"}],
+        pending=[{"message_id": "9-0"}],
+        stream_msgs=[("9-0", {})],  # no spool_path
+    )
+    monkeypatch.setattr(cw, "redis_client", fake)
+    await cw.cleanup_orphaned_spool_files(grace_period_seconds=3600)
+    assert f.exists()
+
+
+@pytest.mark.asyncio
+async def test_deletion_failure_leaves_file(spool, monkeypatch):
+    f = spool / "orphan.eml"
+    make_file(f, age=7200)
+    fake = FakeRedis(groups=[{"name": "email-workers", "last-delivered-id": "0-0"}])
+    monkeypatch.setattr(cw, "redis_client", fake)
+    monkeypatch.setattr(cw, "_safe_delete", lambda *a, **k: False)
     await cw.cleanup_orphaned_spool_files(grace_period_seconds=3600)
     assert f.exists()
 
