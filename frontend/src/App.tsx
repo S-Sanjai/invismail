@@ -361,7 +361,7 @@ function App() {
                   New address
                 </button>
               </div>
-              <div className="expiry-track"><span style={{ width: inbox ? `${Math.max(2, Math.min(100, ((new Date(inbox.expires_at).getTime() - now) / ((inbox as InboxSession & { ttl_seconds?: number }).ttl_seconds ?? ttl) / 1000) * 100))}%` : "0%" }} /></div>
+              <div className="expiry-track"><span style={{ width: inbox ? `${Math.max(2, Math.min(100, ((new Date(inbox.expires_at).getTime() - now) / (inbox.ttl_seconds ?? ttl) / 1000) * 100))}%` : "0%" }} /></div>
             </div>
 
             <div className="mail-layout">
