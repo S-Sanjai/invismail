@@ -10,7 +10,7 @@ InvisMail can receive mail through either its built-in SMTP adapter or a Mailgun
 4. The webhook verifies Mailgun's HTTP webhook signature, validates the active recipient, writes the original MIME message to the spool directory, and publishes the existing `email:incoming` Redis Stream event.
 5. The existing email worker parses and stores the message.
 
-The webhook is `POST /api/v1/inbound/mailgun/raw-mime`. The path ends in `mime` intentionally: Mailgun sends an `application/x-www-form-urlencoded` request with the original message in `body-mime`.
+The webhook is `POST /api/v1/inbound/mailgun/raw-mime`. The path ends in `mime` intentionally so Mailgun includes the original message in the `body-mime` field. Mailgun can send Route forwards as either `application/x-www-form-urlencoded` or `multipart/form-data` (the latter is used when the received message has attachments); the endpoint accepts both.
 
 ## DNS
 
