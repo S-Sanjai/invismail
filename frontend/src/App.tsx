@@ -104,6 +104,7 @@ function prettySize(bytes: number): string {
 
 function App() {
   const [inbox, setInbox] = useState<InboxSession | null>(() => readStoredInbox());
+  const createStarted = useRef(false);
   const [ttl, setTtl] = useState(3600);
   const [messages, setMessages] = useState<EmailListItem[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -138,7 +139,11 @@ function App() {
     setError("");
     setNotice("");
     try {
-      const created = await createInbox(nextTtl);
+      const created = {
+        ...(await createInbox(nextTtl)),
+        created_at: new Date().toISOString(),
+        ttl_seconds: nextTtl,
+      };
       localStorage.setItem(STORAGE_KEY, JSON.stringify(created));
       setInbox(created);
       setMessages([]);
@@ -175,9 +180,10 @@ function App() {
   }, [inbox, isExpired]);
 
   useEffect(() => {
-    if (!inbox) {
+    if (!inbox && !createStarted.current) {
+      createStarted.current = true;
       void createNewInbox(ttl);
-    } else {
+    } else if (inbox) {
       setLoadingInbox(false);
     }
     // Restore or create the browser's current inbox once on mount.
@@ -346,7 +352,7 @@ function App() {
                   <Clock3 size={14} />
                   <span>Expires in</span>
                   <strong>{remaining}</strong>
-                  <select value={ttl} onChange={(event) => setTtl(Number(event.target.value))} aria-label="Inbox lifetime">
+                  <select value={ttl} onChange={(event) => setTtl(Number(event.target.value))} aria-label="Lifetime for the next address" title="Applied when you create the next address">
                     {TTL_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
                   </select>
                 </label>
@@ -355,7 +361,7 @@ function App() {
                   New address
                 </button>
               </div>
-              <div className="expiry-track"><span style={{ width: inbox ? `${Math.max(2, Math.min(100, ((new Date(inbox.expires_at).getTime() - now) / (ttl * 1000)) * 100))}%` : "0%" }} /></div>
+              <div className="expiry-track"><span style={{ width: inbox ? `${Math.max(2, Math.min(100, ((new Date(inbox.expires_at).getTime() - now) / ((inbox as InboxSession & { ttl_seconds?: number }).ttl_seconds ?? ttl) / 1000) * 100))}%` : "0%" }} /></div>
             </div>
 
             <div className="mail-layout">
