@@ -21,6 +21,7 @@ InvisMail lets a client create a temporary inbox, receive messages through a loc
 - [API reference](#api-reference)
 - [Sending test emails](#sending-test-emails)
 - [Mailgun inbound integration](#mailgun-inbound-integration)
+- [Frontend](#frontend)
 - [Database and storage](#database-and-storage)
 - [Testing](#testing)
 - [Security considerations](#security-considerations)
@@ -673,3 +674,19 @@ POST /api/v1/inbound/mailgun/raw-mime
 ```
 
 Set `MAILGUN_WEBHOOK_SIGNING_KEY` in the root `.env` file. Never commit this secret. Mailgun's Route destination must end in `mime` to receive the `body-mime` field.
+
+
+## Frontend
+
+The React + TypeScript + Vite client is located in `frontend/`. See [frontend/README.md](frontend/README.md) for installation, local development, production build, and API integration details.
+
+Quick start from the repository root:
+
+```powershell
+docker compose up -d --build
+cd frontend
+npm install
+npm run dev
+```
+
+Open the Vite URL (normally `http://localhost:5173`). The development server proxies API requests to the local FastAPI service on port 8000.
