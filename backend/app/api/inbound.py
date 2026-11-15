@@ -203,6 +203,7 @@ async def receive_mailgun_raw_mime(request: Request):
         raise HTTPException(status_code=503, detail="This Mailgun delivery is already being processed")
 
     spool_path: str | None = None
+    queue_attempted = False
     try:
         async with SessionLocal() as db:
             result = await db.execute(
@@ -223,6 +224,7 @@ async def receive_mailgun_raw_mime(request: Request):
         sender = (fields.get("sender") or "unknown")[:320]
         received_at = datetime.now(timezone.utc).isoformat()
 
+        queue_attempted = True
         event_id = await redis_client.eval(
             QUEUE_AND_MARK_SCRIPT,
             2,
@@ -237,18 +239,26 @@ async def receive_mailgun_raw_mime(request: Request):
             DEDUP_SECONDS,
         )
         if not event_id:
+            await asyncio.to_thread(safe_delete_spool_file, spool_path, missing_ok=True)
+            spool_path = None
             raise HTTPException(status_code=503, detail="Mailgun delivery lock expired before queueing")
 
         logger.info("Accepted Mailgun message %s for %s (Redis event %s)", message_id, recipient, event_id)
         return {"status": "accepted", "message_id": message_id}
 
     except HTTPException:
-        if spool_path:
+        # If EVAL was attempted, its outcome may be ambiguous (for example, the
+        # Redis response was lost after execution). Preserve the spool file so
+        # a committed stream event can never point at a deleted message.
+        if spool_path and not queue_attempted:
             await asyncio.to_thread(safe_delete_spool_file, spool_path, missing_ok=True)
-        await redis_client.eval(RELEASE_LOCK_SCRIPT, 1, dedup_key, lock_value)
+        try:
+            await redis_client.eval(RELEASE_LOCK_SCRIPT, 1, dedup_key, lock_value)
+        except Exception:
+            logger.exception("Could not release Mailgun delivery lock")
         raise
     except Exception as exc:
-        if spool_path:
+        if spool_path and not queue_attempted:
             await asyncio.to_thread(safe_delete_spool_file, spool_path, missing_ok=True)
         try:
             await redis_client.eval(RELEASE_LOCK_SCRIPT, 1, dedup_key, lock_value)
