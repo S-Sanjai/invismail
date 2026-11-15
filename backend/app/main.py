@@ -15,6 +15,7 @@ from app.api.inboxes import router as inbox_router
 from app.api.messages import router as message_router
 from app.api.events import router as events_router
 from app.api.health import router as health_router
+from app.api.inbound import router as inbound_router
 
 
 app = FastAPI(
@@ -27,6 +28,7 @@ app.include_router(health_router)
 app.include_router(inbox_router)
 app.include_router(message_router)
 app.include_router(events_router)
+app.include_router(inbound_router)
 
 @app.get("/health")
 async def health():
