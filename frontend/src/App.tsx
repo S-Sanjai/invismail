@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertCircle,
-  Archive,
   ArrowDownToLine,
   Check,
   CheckCheck,
@@ -9,21 +8,18 @@ import {
   CircleHelp,
   Clock3,
   Copy,
-  Eye,
   File,
-  Inbox as InboxIcon,
+  Github,
+  Linkedin,
   LoaderCircle,
   Mail,
   MailOpen,
-  MoreHorizontal,
-  Plus,
+  Moon,
   RefreshCw,
   Search,
-  ShieldCheck,
-  Sparkles,
+  Sun,
   Trash2,
   X,
-  Zap,
 } from "lucide-react";
 import {
   createInbox,
@@ -37,12 +33,27 @@ import {
 } from "./lib/api";
 
 const STORAGE_KEY = "invismail.inbox.v1";
+const THEME_KEY = "invismail.theme.v1";
+const GITHUB_URL = "https://github.com/S-Sanjai";
+const LINKEDIN_URL = "https://www.linkedin.com/in/sanjai-s/";
+type Theme = "dark" | "light";
+
 const TTL_OPTIONS = [
   { label: "15 minutes", value: 900 },
   { label: "1 hour", value: 3600 },
   { label: "3 hours", value: 10800 },
   { label: "24 hours", value: 86400 },
 ];
+
+function readTheme(): Theme {
+  try {
+    const stored = localStorage.getItem(THEME_KEY);
+    if (stored === "light" || stored === "dark") return stored;
+  } catch {
+    // Ignore storage access failures and fall back to the system preference.
+  }
+  return window.matchMedia?.("(prefers-color-scheme: light)").matches ? "light" : "dark";
+}
 
 function readStoredInbox(): InboxSession | null {
   try {
@@ -102,15 +113,37 @@ function prettySize(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
+const EMAIL_DOCUMENT_STYLE =
+  ':root{color-scheme:light}body{margin:0;font-family:Inter,ui-sans-serif,system-ui,-apple-system,sans-serif;color:#1f241c;background:#ffffff;padding:24px;font-size:15px;line-height:1.65;overflow-wrap:anywhere}img{max-width:100%;height:auto}a{color:#5b21b6}';
+
+// Rewrite every link in the message so it opens in a real browser tab instead of
+// navigating inside the sandboxed preview frame.
+function buildEmailDocument(html: string): string {
+  const parsed = new DOMParser().parseFromString(html, "text/html");
+
+  parsed.querySelectorAll("base").forEach((node) => node.remove());
+  parsed.querySelectorAll("a[href], area[href]").forEach((node) => {
+    node.setAttribute("target", "_blank");
+    node.setAttribute("rel", "noreferrer noopener");
+  });
+  parsed.querySelectorAll("form").forEach((node) => node.setAttribute("target", "_blank"));
+
+  const emailStyles = Array.from(parsed.querySelectorAll("head style"))
+    .map((node) => node.outerHTML)
+    .join("");
+
+  return `<!doctype html><html><head><meta charset="utf-8"><base target="_blank"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data: cid:; style-src 'unsafe-inline'; font-src data:"><style>${EMAIL_DOCUMENT_STYLE}</style>${emailStyles}</head><body>${parsed.body.innerHTML}</body></html>`;
+}
+
 function App() {
   const [inbox, setInbox] = useState<InboxSession | null>(() => readStoredInbox());
+  const [theme, setTheme] = useState<Theme>(() => readTheme());
   const createStarted = useRef(false);
   const [ttl, setTtl] = useState(3600);
   const [messages, setMessages] = useState<EmailListItem[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [selectedMessage, setSelectedMessage] = useState<EmailDetail | null>(null);
   const [loadingInbox, setLoadingInbox] = useState(!readStoredInbox());
-  const [loadingMessages, setLoadingMessages] = useState(false);
   const [loadingDetail, setLoadingDetail] = useState(false);
   const [creating, setCreating] = useState(false);
   const [search, setSearch] = useState("");
@@ -119,11 +152,11 @@ function App() {
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
   const [mobileView, setMobileView] = useState<"list" | "message">("list");
+  const [refreshing, setRefreshing] = useState(false);
+  const [aboutOpen, setAboutOpen] = useState(false);
   const refreshInFlight = useRef(false);
-  const firstLoad = useRef(true);
 
   const remaining = inbox ? formatRemaining(inbox.expires_at, now) : "--:--";
-  const unreadCount = messages.filter((message) => !message.is_read).length;
 
   const filteredMessages = useMemo(() => {
     const term = search.trim().toLowerCase();
@@ -159,10 +192,9 @@ function App() {
     }
   }, [ttl]);
 
-  const refreshMessages = useCallback(async (quiet = false) => {
+  const refreshMessages = useCallback(async () => {
     if (!inbox || refreshInFlight.current || new Date(inbox.expires_at).getTime() <= Date.now()) return;
     refreshInFlight.current = true;
-    if (!quiet) setLoadingMessages(true);
     try {
       const response = await listMessages(inbox.access_token);
       setMessages(response.items);
@@ -174,7 +206,6 @@ function App() {
       setError(err instanceof Error ? err.message : "Unable to refresh this inbox.");
     } finally {
       refreshInFlight.current = false;
-      setLoadingMessages(false);
     }
   }, [inbox]);
 
@@ -190,15 +221,24 @@ function App() {
   }, []);
 
   useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+    document.querySelector('meta[name="theme-color"]')?.setAttribute("content", theme === "dark" ? "#0e0d13" : "#f4f3f9");
+    try {
+      localStorage.setItem(THEME_KEY, theme);
+    } catch {
+      // Ignore storage access failures; the theme still applies for this session.
+    }
+  }, [theme]);
+
+  useEffect(() => {
     const timer = window.setInterval(() => setNow(Date.now()), 1000);
     return () => window.clearInterval(timer);
   }, []);
 
   useEffect(() => {
     if (!inbox) return;
-    void refreshMessages(firstLoad.current ? false : true);
-    firstLoad.current = false;
-    const poll = window.setInterval(() => void refreshMessages(true), 5000);
+    void refreshMessages();
+    const poll = window.setInterval(() => void refreshMessages(), 5000);
     return () => window.clearInterval(poll);
   }, [inbox, refreshMessages]);
 
@@ -231,10 +271,25 @@ function App() {
   }, [inbox, selectedId]);
 
   useEffect(() => {
+    if (!aboutOpen) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setAboutOpen(false);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [aboutOpen]);
+
+  useEffect(() => {
     if (!notice) return;
     const timer = window.setTimeout(() => setNotice(""), 2400);
     return () => window.clearTimeout(timer);
   }, [notice]);
+
+  const handleRefresh = async () => {
+    setRefreshing(true);
+    await refreshMessages();
+    setRefreshing(false);
+  };
 
   const copyAddress = async () => {
     if (!inbox) return;
@@ -279,112 +334,125 @@ function App() {
   };
 
   const handleNewAddress = async () => {
-    firstLoad.current = true;
     await createNewInbox(ttl);
   };
 
-  const htmlDocument = selectedMessage?.html_body
-    ? `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data: cid:; style-src 'unsafe-inline'; font-src data:;"><style>body{font-family:Inter,ui-sans-serif,system-ui,-apple-system,sans-serif;color:#e8ebe4;background:#fff;padding:22px;line-height:1.6;overflow-wrap:anywhere}img{max-width:100%;height:auto}a{color:#477b24}</style></head><body>${selectedMessage.html_body}</body></html>`
-    : "";
+  const htmlDocument = useMemo(
+    () => (selectedMessage?.html_body ? buildEmailDocument(selectedMessage.html_body) : ""),
+    [selectedMessage?.html_body],
+  );
 
   return (
     <div className="app-shell">
-      <div className="ambient ambient-one" />
-      <div className="ambient ambient-two" />
       <header className="topbar">
         <a className="brand" href="/" aria-label="InvisMail home">
-          <img src="/invismail-mark.svg" alt="" className="brand-mark" />
-          <span className="brand-name"><span>Invis</span>Mail</span>
-          <span className="brand-beta">BETA</span>
+          <span className="brand-name"><span className="brand-invis">Invis</span><span className="brand-mail">Mail</span></span>
         </a>
         <div className="topbar-right">
-          <span className="system-status"><span className="status-dot" /> System operational</span>
-          <a className="top-link" href="https://github.com/S-Sanjai/invismail" target="_blank" rel="noreferrer">Open source <span>↗</span></a>
-          <button className="icon-button help-button" title="About InvisMail" onClick={() => setNotice("A temporary inbox that stays yours for a little while.")}>
+          <a
+            className="icon-button github-button"
+            href={GITHUB_URL}
+            target="_blank"
+            rel="noreferrer"
+            title="GitHub"
+            aria-label="GitHub profile"
+          >
+            <Github size={17} />
+          </a>
+          <button
+            className="icon-button theme-button"
+            title={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
+            aria-label={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
+            onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
+          >
+            {theme === "dark" ? <Sun size={17} /> : <Moon size={17} />}
+          </button>
+          <button
+            className="icon-button help-button"
+            title="About InvisMail"
+            aria-label="About InvisMail"
+            aria-expanded={aboutOpen}
+            onClick={() => setAboutOpen((open) => !open)}
+          >
             <CircleHelp size={17} />
           </button>
         </div>
       </header>
 
       <main className="workspace">
-        <aside className="sidebar">
-          <div className="sidebar-section-label">WORKSPACE</div>
-          <button className="side-nav active"><InboxIcon size={17} /> <span>Inbox</span><span className="nav-count">{messages.length}</span></button>
-          <div className="sidebar-spacer" />
-          <div className="privacy-card">
-            <div className="privacy-icon"><Eye size={17} /></div>
-            <div className="privacy-title">Less exposure. More control.</div>
-            <p>Your temporary address keeps your personal inbox out of the loop.</p>
-            <div className="privacy-rule" />
-            <div className="privacy-foot"><ShieldCheck size={13} /> Private by design</div>
-          </div>
-          <div className="sidebar-footer">
-            <span className="sidebar-footer-dot" /> Personal workspace
-          </div>
-        </aside>
-
         <section className="main-panel">
-          <div className="page-heading">
-            <div>
-              <div className="eyebrow"><span className="eyebrow-line" /> TEMPORARY EMAIL, WITHOUT THE NOISE</div>
-              <h1>Your quiet corner<br /><span>of the internet.</span></h1>
-              <p className="intro-copy">A disposable inbox for the things that don't need your real address.</p>
-            </div>
-            <div className="heading-note"><span className="heading-note-icon"><Sparkles size={15} /></span><span>Ready when you are.<br /><strong>Gone when time's up.</strong></span></div>
-          </div>
+          <h1 className="sr-only">InvisMail temporary inbox</h1>
 
           <section className="inbox-card">
             <div className="inbox-toolbar">
-              <div className="address-block">
-                <div className="field-label">YOUR TEMPORARY ADDRESS</div>
-                <div className="address-line">
-                  <span className="address-at">@</span>
-                  <span className="address-value">{loadingInbox ? "Creating your private address..." : inbox?.email_address ?? "Inbox unavailable"}</span>
-                  <button className="copy-button" onClick={() => void copyAddress()} disabled={!inbox} aria-label="Copy email address">
-                    {copied ? <Check size={15} /> : <Copy size={15} />}
-                    <span>{copied ? "Copied" : "Copy address"}</span>
-                  </button>
-                </div>
+              <div className="address-line">
+                <span className="address-at">@</span>
+                <span className="address-value">
+                  {loadingInbox ? "Creating your address…" : inbox?.email_address ?? "Inbox unavailable"}
+                </span>
+                <button className="copy-button" onClick={() => void copyAddress()} disabled={!inbox} aria-label="Copy email address">
+                  {copied ? <Check size={16} /> : <Copy size={16} />}
+                  <span>{copied ? "Copied" : "Copy"}</span>
+                </button>
+                <button
+                  className="icon-button regenerate-button"
+                  onClick={() => void handleNewAddress()}
+                  disabled={creating}
+                  title="Generate a new address"
+                  aria-label="Generate a new address"
+                >
+                  {creating ? <LoaderCircle className="spin" size={16} /> : <RefreshCw size={16} />}
+                </button>
               </div>
               <div className="toolbar-actions">
                 <label className="ttl-control">
-                  <Clock3 size={14} />
+                  <Clock3 size={15} />
                   <span>Expires in</span>
                   <strong>{remaining}</strong>
-                  <span className="ttl-next-label">Next:</span>
-                  <select value={ttl} onChange={(event) => setTtl(Number(event.target.value))} aria-label="Lifetime for the next address" title="Applied when you create the next address">
-                    {TTL_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                  <select
+                    value={ttl}
+                    onChange={(event) => setTtl(Number(event.target.value))}
+                    aria-label="Lifetime for the next address"
+                    title="Applied when you generate a new address"
+                  >
+                    {TTL_OPTIONS.map((option) => (
+                      <option key={option.value} value={option.value}>{option.label}</option>
+                    ))}
                   </select>
                 </label>
-                <button className="text-action" onClick={() => void handleNewAddress()} disabled={creating}>
-                  {creating ? <LoaderCircle className="spin" size={14} /> : <Plus size={14} />}
-                  New address
-                </button>
               </div>
-              <div className="expiry-track"><span style={{ width: inbox ? `${Math.max(2, Math.min(100, ((new Date(inbox.expires_at).getTime() - now) / (inbox.ttl_seconds ?? ttl) / 1000) * 100))}%` : "0%" }} /></div>
+              <div className="expiry-track">
+                <span style={{ width: inbox ? `${Math.max(2, Math.min(100, ((new Date(inbox.expires_at).getTime() - now) / (inbox.ttl_seconds ?? ttl) / 1000) * 100))}%` : "0%" }} />
+              </div>
             </div>
 
             <div className="mail-layout">
               <section className={`message-list-pane ${mobileView === "message" ? "mobile-hidden" : ""}`}>
                 <div className="list-header">
                   <div className="list-title">Inbox <span className="count-pill">{messages.length}</span></div>
-                  <button className={`icon-button refresh-button ${loadingMessages ? "is-refreshing" : ""}`} onClick={() => void refreshMessages()} disabled={!inbox || loadingMessages} title="Refresh inbox">
-                    <RefreshCw size={15} />
+                  <button
+                    className={`icon-button refresh-button ${refreshing ? "is-refreshing" : ""}`}
+                    onClick={() => void handleRefresh()}
+                    disabled={!inbox || refreshing}
+                    title="Refresh inbox"
+                    aria-label="Refresh inbox"
+                  >
+                    <RefreshCw size={16} />
                   </button>
                 </div>
                 <div className="search-box">
-                  <Search size={15} />
-                  <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search your inbox" aria-label="Search your inbox" />
-                  {search && <button onClick={() => setSearch("")} aria-label="Clear search"><X size={13} /></button>}
+                  <Search size={16} />
+                  <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search inbox" aria-label="Search your inbox" />
+                  {search && <button onClick={() => setSearch("")} aria-label="Clear search"><X size={14} /></button>}
                 </div>
                 <div className="message-list">
                   {loadingInbox ? (
-                    <div className="list-loading"><LoaderCircle size={18} className="spin" /> Preparing your inbox</div>
+                    <div className="list-loading"><LoaderCircle size={20} className="spin" /> Preparing your inbox</div>
                   ) : filteredMessages.length === 0 ? (
                     <div className="empty-list">
-                      <div className="empty-mail-icon"><MailOpen size={21} /></div>
-                      <strong>{search ? "No matching messages" : "Nothing in here. Yet."}</strong>
-                      <p>{search ? "Try a different sender or subject." : "Your inbox is listening. New messages will appear here automatically."}</p>
+                      <div className="empty-mail-icon"><MailOpen size={23} /></div>
+                      <strong>{search ? "No matching messages" : "Nothing here yet"}</strong>
+                      <p>{search ? "Try a different sender or subject." : "New messages will appear here automatically."}</p>
                     </div>
                   ) : filteredMessages.map((message) => (
                     <button
@@ -396,36 +464,31 @@ function App() {
                       <span className="message-row-content">
                         <span className="message-row-top"><strong>{message.sender}</strong><time>{formatTime(message.received_at)}</time></span>
                         <span className="message-subject">{message.subject || "(No subject)"}</span>
-                        <span className="message-preview">{message.is_read ? "Open message" : "New message"}</span>
                       </span>
                       {!message.is_read && <span className="unread-dot" />}
                     </button>
                   ))}
                 </div>
-                <div className="list-bottom"><span><span className="live-dot" /> Updates automatically</span><span>{unreadCount} unread</span></div>
               </section>
 
               <section className={`reading-pane ${mobileView === "list" ? "mobile-hidden" : ""}`}>
                 {!selectedId ? (
                   <div className="reading-empty">
-                    <div className="empty-illustration"><Mail size={25} /></div>
-                    <h2>Your inbox is ready.</h2>
+                    <div className="empty-illustration"><Mail size={26} /></div>
+                    <h2>Your inbox is ready</h2>
                     <p>Send an email to your temporary address. It will show up here as soon as it arrives.</p>
-                    <div className="empty-hint"><Zap size={15} /> No refresh ritual required.</div>
                   </div>
                 ) : loadingDetail ? (
-                  <div className="reading-empty"><LoaderCircle className="spin" size={22} /><p>Opening message…</p></div>
+                  <div className="reading-empty"><LoaderCircle className="spin" size={24} /><p>Opening message…</p></div>
                 ) : selectedMessage ? (
                   <article className="email-detail">
                     <div className="detail-toolbar">
-                      <button className="back-button" onClick={() => setMobileView("list")}><ChevronDown size={15} /> Back to inbox</button>
+                      <button className="back-button" onClick={() => setMobileView("list")}><ChevronDown size={16} /> Back to inbox</button>
                       <div className="detail-actions">
-                        <button className="icon-button" title="Delete message" onClick={() => void handleDelete()}><Trash2 size={16} /></button>
-                        <button className="icon-button" title="More actions" onClick={() => setNotice("Message received " + formatFullDate(selectedMessage.received_at))}><MoreHorizontal size={17} /></button>
+                        <button className="icon-button" title="Delete message" aria-label="Delete message" onClick={() => void handleDelete()}><Trash2 size={17} /></button>
                       </div>
                     </div>
                     <div className="email-content">
-                      <div className="detail-category"><span className="category-dot" /> RECEIVED MESSAGE</div>
                       <h2 className="email-subject">{selectedMessage.subject || "(No subject)"}</h2>
                       <div className="sender-block">
                         <div className="sender-avatar large">{initials(selectedMessage.sender)}</div>
@@ -437,24 +500,24 @@ function App() {
                           <iframe
                             className="html-email-frame"
                             title="Email content"
-                            sandbox=""
+                            sandbox="allow-popups allow-popups-to-escape-sandbox"
                             referrerPolicy="no-referrer"
                             srcDoc={htmlDocument}
                           />
                         ) : selectedMessage.text_body ? (
                           <pre className="plain-email">{selectedMessage.text_body}</pre>
                         ) : (
-                          <div className="no-body">This message doesn't contain a text body.</div>
+                          <div className="no-body">This message doesn&apos;t contain a text body.</div>
                         )}
                       </div>
                       {selectedMessage.attachments.length > 0 && (
                         <div className="attachments">
-                          <div className="attachments-heading"><span>Attachments</span><span>{selectedMessage.attachments.length} file(s)</span></div>
+                          <div className="attachments-heading"><span>Attachments</span><span>{selectedMessage.attachments.length}</span></div>
                           {selectedMessage.attachments.map((attachment) => (
                             <button key={attachment.id} className="attachment-row" onClick={() => void handleDownload(attachment.id, attachment.filename)}>
-                              <span className="attachment-icon"><File size={17} /></span>
+                              <span className="attachment-icon"><File size={18} /></span>
                               <span className="attachment-name"><strong>{attachment.filename}</strong><small>{prettySize(attachment.size)} · {attachment.content_type}</small></span>
-                              <ArrowDownToLine size={16} />
+                              <ArrowDownToLine size={17} />
                             </button>
                           ))}
                         </div>
@@ -462,26 +525,54 @@ function App() {
                     </div>
                   </article>
                 ) : (
-                  <div className="reading-empty"><AlertCircle size={22} /><h2>Couldn't open this message.</h2><p>Refresh the inbox and try again.</p></div>
+                  <div className="reading-empty"><AlertCircle size={24} /><h2>Couldn&apos;t open this message</h2><p>Refresh the inbox and try again.</p></div>
                 )}
               </section>
             </div>
           </section>
-
-          <footer className="page-footer">
-            <div><ShieldCheck size={14} /> Your inbox, your key</div>
-            <div><Clock3 size={14} /> Expires automatically</div>
-            <div><Archive size={14} /> Messages are temporary</div>
-            <span>Built to disappear.</span>
-          </footer>
         </section>
       </main>
 
+      {aboutOpen && (
+        <div className="about-layer" onClick={() => setAboutOpen(false)}>
+          <section
+            className="about-card"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="about-title"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="about-head">
+              <h2 id="about-title">About InvisMail</h2>
+              <button className="icon-button" onClick={() => setAboutOpen(false)} aria-label="Close">
+                <X size={15} />
+              </button>
+            </div>
+            <p className="about-copy">
+              A self-hosted disposable inbox: InvisMail generates a temporary address that expires after a set
+              lifetime, receives mail through a local SMTP adapter or a Mailgun inbound webhook, and parses each
+              message in a FastAPI worker so it appears here on its own. Inboxes, messages and attachments live in
+              PostgreSQL and local storage, tied only to the access token this browser holds.
+            </p>
+            <div className="about-links">
+              <a href={GITHUB_URL} target="_blank" rel="noreferrer">
+                <Github size={15} /> GitHub
+              </a>
+              {LINKEDIN_URL && (
+                <a href={LINKEDIN_URL} target="_blank" rel="noreferrer">
+                  <Linkedin size={15} /> LinkedIn
+                </a>
+              )}
+            </div>
+          </section>
+        </div>
+      )}
+
       {(error || notice) && (
         <div className={`toast ${error ? "toast-error" : ""}`} role="status">
-          {error ? <AlertCircle size={16} /> : <CheckCheck size={16} />}
+          {error ? <AlertCircle size={17} /> : <CheckCheck size={17} />}
           <span>{error || notice}</span>
-          <button onClick={() => { setError(""); setNotice(""); }} aria-label="Dismiss"><X size={14} /></button>
+          <button onClick={() => { setError(""); setNotice(""); }} aria-label="Dismiss"><X size={15} /></button>
         </div>
       )}
     </div>
